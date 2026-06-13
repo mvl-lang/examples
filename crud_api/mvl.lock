@@ -3,14 +3,14 @@
 
 [[package]]
 name = "github.com/mvl-lang/pkg-sqlite"
-version = "0.1.1"
-hash = "sha256:e55934cc144aff4868691ac16da6f90bb794189cc7a0e741d2fc623c4bc5edbd"
-commit = "a4363eb3c28462ea7e780f7642eaa2d43327b72e"
+version = "0.1.3"
+hash = "sha256:7a78e582685beda9064ff9c9d54c3a642daf3b7ef275b0900b46bbb33d3fb7a1"
+commit = "c92cc55ab54b388d3e4897d907a5d04c0818eefa"
 git = "https://github.com/mvl-lang/pkg-sqlite"
 
 [[package]]
 name = "github.com/mvl-lang/pkg-http"
-version = "0.1.1"
-hash = "sha256:57a74f3d93f1941b71ce67831c47a11b1fa1c3bf3b90e84504097fa402513ee7"
-commit = "353d15db032eceb3c62f5c9530de82a79ff1954f"
+version = "0.2.0"
+hash = "sha256:e9299bccffefba5712e5ba769cf760d4f235ec07c58f41a948ecc60235ad14c3"
+commit = "cdde87ab5650d79b3d8fcfdbdaae3bd1706c7cca"
 git = "https://github.com/mvl-lang/pkg-http"
