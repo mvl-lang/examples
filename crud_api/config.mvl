@@ -20,6 +20,7 @@ pub type CrudApiConfig = struct {
     host:       String,
     port:       Int,
     db_path:    String,
+    audit_path: String,
     seed_file:  String,
     log_level:  LogLevel,
     log_format: LogFormat,
@@ -37,6 +38,7 @@ fn defaults() -> ConfigValue {
         "host":       ConfigValue::String("127.0.0.1"),
         "port":       ConfigValue::Int(8080),
         "db_path":    ConfigValue::String("/tmp/crud_api.db"),
+        "audit_path": ConfigValue::String("./audit.jsonl"),
         "seed_file":  ConfigValue::String(""),
         "log_level":  ConfigValue::String("info"),
         "log_format": ConfigValue::String("plain"),
@@ -65,6 +67,7 @@ partial fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
         optional("host",       ArgType::Str),
         optional("port",       ArgType::Int),
         optional("db-path",    ArgType::Str),
+        optional("audit-path", ArgType::Str),
         optional("seed-file",  ArgType::Str),
         optional("log-level",  ArgType::Str),
         optional("log-format", ArgType::Str),
@@ -84,6 +87,11 @@ partial fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
     // --db-path
     let cfg: ConfigValue = match cli.get("db-path") {
         Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"db_path": ConfigValue::String(v)})),
+        _ => cfg,
+    };
+    // --audit-path
+    let cfg: ConfigValue = match cli.get("audit-path") {
+        Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"audit_path": ConfigValue::String(v)})),
         _ => cfg,
     };
     // --seed-file
@@ -111,6 +119,7 @@ partial fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
         host:       as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?,
         port:       as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
         db_path:    as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?,
+        audit_path: as_string(get_path(cfg, "audit_path").unwrap_or(ConfigValue::String("./audit.jsonl")))?,
         seed_file:  as_string(get_path(cfg, "seed_file").unwrap_or(ConfigValue::String("")))?,
         log_level:  parse_log_level(as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info")))?),
         log_format: parse_log_format(as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain")))?),
