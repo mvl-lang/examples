@@ -16,6 +16,7 @@ type CrudApiConfig = struct {
     host:       String,
     port:       Int,
     db_path:    String,
+    audit_path: String,
     seed_file:  String,
     log_level:  LogLevel,
     log_format: LogFormat,
@@ -28,6 +29,7 @@ fn defaults() -> ConfigValue {
         "host":       ConfigValue::String("127.0.0.1"),
         "port":       ConfigValue::Int(8080),
         "db_path":    ConfigValue::String("/tmp/crud_api.db"),
+        "audit_path": ConfigValue::String("./audit.jsonl"),
         "seed_file":  ConfigValue::String(""),
         "log_level":  ConfigValue::String("info"),
         "log_format": ConfigValue::String("plain"),
@@ -39,6 +41,7 @@ fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
         host:       as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?,
         port:       as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?,
         db_path:    as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?,
+        audit_path: as_string(get_path(cfg, "audit_path").unwrap_or(ConfigValue::String("./audit.jsonl")))?,
         seed_file:  as_string(get_path(cfg, "seed_file").unwrap_or(ConfigValue::String("")))?,
         log_level:  parse_log_level(as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info")))?),
         log_format: parse_log_format(as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain")))?),
@@ -104,6 +107,7 @@ test fn extract_defaults_succeeds() -> Unit {
             assert_eq(cfg.host, "127.0.0.1");
             assert_eq(cfg.port, 8080);
             assert_eq(cfg.db_path, "/tmp/crud_api.db");
+            assert_eq(cfg.audit_path, "./audit.jsonl");
             assert_eq(cfg.seed_file, "");
             assert_eq(cfg.log_level, LogLevel::Info);
             assert_eq(cfg.log_format, LogFormat::Plain)
@@ -201,7 +205,16 @@ test fn toml_layer_log_level_propagates() -> Unit {
     }
 }
 
-// 14. TOML layer: log_format override propagates through extract.
+// 14. Defaults produce audit_path "./audit.jsonl".
+test fn defaults_audit_path_is_audit_jsonl() -> Unit {
+    let cfg: ConfigValue = defaults();
+    match get_path(cfg, "audit_path") {
+        Some(v) => assert_eq(as_string(v), Ok("./audit.jsonl")),
+        None    => assert_eq(true, false),
+    }
+}
+
+// 15. TOML layer: log_format override propagates through extract.
 test fn toml_layer_log_format_propagates() -> Unit {
     let base: ConfigValue = defaults();
     let toml_str: String = "log_format = \"json\"\n";

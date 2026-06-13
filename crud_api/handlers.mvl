@@ -23,10 +23,11 @@ use pkg.http.{Request, Response, MatchedRoute,
               json_ok_str, json_created_str, json_no_content, json_error,
               param_int, body_obj, json_field_string,
               http_not_found, http_bad_request, http_internal_error,
-              json_str}
+              json_str, status_code}
 use pkg.sqlite.{SqliteDb}
+use std.io.{IoError}
 use std.log.{Logger}
-use std.audit.{AuditLogger, AuditEvent, modify, access, deny, fail, with_details}
+use std.audit.{AuditLogger, AuditEvent, modify, access, deny}
 
 // ── JSON encoding helpers ─────────────────────────────────────────────────────
 
@@ -66,7 +67,7 @@ pub partial fn list_users_handler(
     match db_list_users(db) {
         Err(e) => {
             logger.error("db_error", {"action": "list_users", "error": e});
-            auditor.emit(fail(access("api:anonymous", "users:collection"), e));
+            auditor.emit(access("api:anonymous", "users:collection").fail(e));
             json_error(http_internal_error("internal server error"))
         },
         Ok(users) => {
@@ -97,7 +98,7 @@ pub partial fn get_user_handler(
             match db_get_user(db, id) {
                 Err(e) => {
                     logger.error("db_error", {"action": "get_user", "error": e});
-                    auditor.emit(fail(access("api:anonymous", resource), e));
+                    auditor.emit(access("api:anonymous", resource).fail(e));
                     json_error(http_internal_error("internal server error"))
                 },
                 Ok(None) => {
@@ -150,7 +151,7 @@ pub partial fn create_user_handler(
                     json_error(http_bad_request(msg))
                 } else {
                     logger.error("db_error", {"action": "create_user", "error": msg});
-                    auditor.emit(fail(modify("api:anonymous", "users:collection", "create.user"), msg));
+                    auditor.emit(modify("api:anonymous", "users:collection", "create.user").fail(msg));
                     json_error(http_internal_error("internal server error"))
                 }
             },
@@ -220,17 +221,19 @@ pub partial fn update_user_handler(
                 Err(resp) => resp,
                 Ok(upd) => match apply_update(db, id, upd) {
                     resp => {
-                        if resp.status == 200 {
+                        if status_code(resp.status) == 200 {
                             logger.info("updated", {"action": "update_user", "id": id.to_string()});
-                            auditor.emit(modify("api:anonymous", resource, "update.user"));
-                        } else if resp.status == 404 {
+                            let _: Result[Unit, IoError] = auditor.emit(modify("api:anonymous", resource, "update.user"));
+                            resp
+                        } else if status_code(resp.status) == 404 {
                             logger.info("not_found", {"action": "update_user", "id": id.to_string()});
-                            auditor.emit(deny("api:anonymous", resource, "not found"));
+                            let _: Result[Unit, IoError] = auditor.emit(deny("api:anonymous", resource, "not found"));
+                            resp
                         } else {
                             logger.error("db_error", {"action": "update_user", "id": id.to_string()});
-                            auditor.emit(fail(modify("api:anonymous", resource, "update.user"), "db error"));
+                            let _: Result[Unit, IoError] = auditor.emit(modify("api:anonymous", resource, "update.user").fail("db error"));
+                            resp
                         }
-                        resp
                     },
                 },
             }
@@ -257,7 +260,7 @@ pub partial fn delete_user_handler(
             match db_delete_user(db, id) {
                 Err(e) => {
                     logger.error("db_error", {"action": "delete_user", "error": e});
-                    auditor.emit(fail(modify("api:anonymous", resource, "delete.user"), e));
+                    auditor.emit(modify("api:anonymous", resource, "delete.user").fail(e));
                     json_error(http_internal_error("internal server error"))
                 },
                 Ok(false) => {
