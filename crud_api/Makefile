@@ -10,7 +10,7 @@
 #   make seed                    # Seed database from CSV
 #   make clean                   # Remove build artifacts
 
-.PHONY: help build run run-dev run-json test test-unit test-api test-api-list test-api-crud
+.PHONY: help install build run run-dev run-json test test-unit test-api test-api-list test-api-crud
 .PHONY: seed db-reset audit-tail audit-clear fmt check lint prove assurance assurance-verbose coverage smoke clean
 
 .DEFAULT_GOAL := help
@@ -36,24 +36,27 @@ help: ## Show this help
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 guard-mvl:
-	$(MVL) --version > /dev/null 2>&1 || { echo "Run 'make build' from repo root first."; exit 1; }
+	@$(MVL) --version > /dev/null 2>&1 || { echo "mvl not found — install the MVL compiler first."; exit 1; }
 
-build: ## Build the application
+install: guard-mvl ## Fetch and verify all dependencies from mvl.lock
+	$(MVL) install
+
+build: install ## Build the application
 	$(MVL) build $(MVL_FLAGS) $(DIR)main.mvl
 
-smoke: ## Smoke-test: build binary (proves compilation)
+smoke: install ## Smoke-test: build binary (proves compilation)
 	$(MVL) build $(MVL_FLAGS) $(DIR)main.mvl
 
 # ── Run ────────────────────────────────────────────────────────────────────────
 
-run: ## Start server with defaults (port 8080)
+run: install ## Start server with defaults (port 8080)
 	$(MVL) run $(MVL_FLAGS) $(DIR)main.mvl -- $(ARGS)
 
-run-dev: ## Start server with debug logging (plain format)
+run-dev: install ## Start server with debug logging (plain format)
 	CRUD_API_LOG_LEVEL=debug CRUD_API_LOG_FORMAT=plain \
 	$(MVL) run $(MVL_FLAGS) $(DIR)main.mvl -- $(ARGS)
 
-run-json: ## Start server with JSON log format
+run-json: install ## Start server with JSON log format
 	CRUD_API_LOG_FORMAT=json \
 	$(MVL) run $(MVL_FLAGS) $(DIR)main.mvl -- $(ARGS)
 
@@ -118,32 +121,27 @@ audit-clear: ## Clear audit log
 
 # ── Code Quality ───────────────────────────────────────────────────────────────
 
-fmt: ## Format all source files
+fmt: guard-mvl ## Format all source files
 	$(MVL) fmt $(DIR)
 
-check: ## Type-check all source files
-	@for f in $(SRCS); do \
-		$(MVL) check $(MVL_FLAGS) "$$f"; \
-	done
+check: guard-mvl ## Type-check all source files
+	$(MVL) check $(MVL_FLAGS) $(DIR)
 
-lint: ## Lint all source files
-	@for f in $(SRCS); do \
-		$(MVL) lint "$$f"; \
-	done
+lint: guard-mvl ## Lint all source files
+	$(MVL) lint $(MVL_FLAGS) $(DIR)
 
-# ── prove ────────────────────────────────────────────────────────────────────
 prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
-	$(MVL) prove --verbose $(DIR)
+	$(MVL) prove $(MVL_FLAGS) $(DIR)
 
 # ── Assurance ──────────────────────────────────────────────────────────────────
 
-assurance: ## Generate assurance report
+assurance: guard-mvl ## Generate assurance report
 	$(MVL) assurance $(MVL_FLAGS) $(DIR)
 
-assurance-verbose: ## Generate verbose assurance report
+assurance-verbose: guard-mvl ## Generate verbose assurance report
 	$(MVL) assurance $(MVL_FLAGS) --verbose $(DIR)
 
-coverage: ## Generate coverage report
+coverage: guard-mvl ## Generate coverage report
 	$(MVL) test $(MVL_FLAGS) --coverage $(DIR)
 
 # ── Clean ──────────────────────────────────────────────────────────────────────

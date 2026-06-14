@@ -14,9 +14,9 @@
 #   make test-all      — run all test modes
 #   make check         — type-check all MVL sources
 #
-.PHONY: help guard-mvl guard-pyzmq check prove fmt lint build test test-zmq test-rust \
+.PHONY: help guard-mvl guard-pyzmq install check prove fmt lint build test test-zmq test-rust \
         test-pushpull test-pubsub test-all run run-zmtp clean smoke test-solver \
-        assurance assurance-verbose coverage local-pkg unlink-pkg
+        assurance assurance-verbose coverage
 
 .DEFAULT_GOAL := help
 
@@ -49,7 +49,7 @@ guard-pyzmq: ## Ensure pyzmq is installed in the active venv
 	}
 
 # Pre-build all MVL binaries so `mvl run` is instant (cached cargo build).
-build: guard-mvl ## Build all MVL binaries
+build: install ## Build all MVL binaries
 	@echo "  Building MVL binaries..."
 	@$(MVL) build $(MVL_FLAGS) $(DIR)server.mvl > /dev/null 2>&1
 	@$(MVL) build $(MVL_FLAGS) $(DIR)server_zmtp.mvl > /dev/null 2>&1
@@ -305,42 +305,30 @@ assurance-verbose: guard-mvl ## Generate verbose assurance report
 	$(MVL) assurance $(MVL_FLAGS) --verbose $(DIR)
 
 coverage: guard-mvl ## Generate coverage report
-	$(MVL) coverage $(MVL_FLAGS) $(DIR)
+	$(MVL) test $(MVL_FLAGS) --coverage $(DIR)
 
-smoke: build ## Smoke-test: verify all MVL binaries compile
+# ── Package management ────────────────────────────────────────────────────────
+
+install: guard-mvl ## Fetch and verify all dependencies from mvl.lock
+	$(MVL) install
+
+# ── Run / smoke ───────────────────────────────────────────────────────────────
+
+smoke: install ## Smoke-test: verify all MVL binaries compile
 	@echo "  \033[32m✓  all MVL binaries built successfully\033[0m"
 
-run: build ## Start the simplified REP server (Ctrl-C to stop)
+run: install ## Start the simplified REP server (Ctrl-C to stop)
 	$(MVL) run $(MVL_FLAGS) $(DIR)server.mvl
 
-run-zmtp: build ## Start the ZMTP REP server (Ctrl-C to stop)
+run-zmtp: install ## Start the ZMTP REP server (Ctrl-C to stop)
 	$(MVL) run $(MVL_FLAGS) $(DIR)server_zmtp.mvl
 
-run-pull: build ## Start the ZMTP PULL server (Ctrl-C to stop)
+run-pull: install ## Start the ZMTP PULL server (Ctrl-C to stop)
 	$(MVL) run $(MVL_FLAGS) $(DIR)server_pull.mvl
-
-# ── Local package overrides ───────────────────────────────────────────────────
-# Symlink .mvl/pkg/<name> → ~/wc/pkg-zmq so the compiler uses your local checkout.
-
-PKG_ZMQ_LOCAL := $(HOME)/wc/pkg-zmq
-PKG_ZMQ_LINK  := $(DIR).mvl/pkg/github.com_mvl-lang_pkg-zmq
-
-local-pkg: ## Symlink pkg-zmq to ~/wc/pkg-zmq (local dev override)
-	@mkdir -p $(DIR).mvl/pkg
-	@if [ -L "$(PKG_ZMQ_LINK)" ]; then \
-		echo "  already linked: $(PKG_ZMQ_LINK) → $$(readlink $(PKG_ZMQ_LINK))"; \
-	else \
-		ln -s $(PKG_ZMQ_LOCAL) $(PKG_ZMQ_LINK); \
-		echo "  linked: $(PKG_ZMQ_LINK) → $(PKG_ZMQ_LOCAL)"; \
-	fi
-
-unlink-pkg: ## Remove local pkg-zmq symlink (revert to cached version)
-	@rm -f $(PKG_ZMQ_LINK)
-	@echo "  removed: $(PKG_ZMQ_LINK)"
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 
-clean: ## Remove temporary log files and .mvl overrides
+clean: ## Remove build artifacts and temporary log files
 	rm -f /tmp/zmq_hello_server.log /tmp/zmq_hello_zmtp.log
 	rm -f /tmp/zmq_hello_pull.log /tmp/zmq_hello_pub.log
-	rm -rf .mvl
+	rm -rf target/

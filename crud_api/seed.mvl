@@ -51,10 +51,8 @@ pub partial fn db_seed_from_csv(val db: SqliteDb, val logger: Logger, path: Stri
         Ok(raw) => {
             let content: String = relabel trust(raw, "SEED-CSV");
             match parse_with_headers(content) {
-                Err(CsvError::ParseError(line_num, err_msg)) => {
-                    let n: Int = line_num;
-                    Err("CSV parse error at line ".concat(n.to_string()).concat(": ").concat(err_msg))
-                },
+                Err(CsvError::ParseError(line_num, err_msg)) =>
+                    Err("CSV parse error at line ".concat(line_num.to_string()).concat(": ").concat(err_msg)),
                 Err(_) => Err("CSV parse error"),
                 Ok(csv) => {
                     match db_clear_users(db) {
