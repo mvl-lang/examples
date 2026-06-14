@@ -123,7 +123,7 @@ partial fn process_stream(val db: SqliteDb, val logger: Logger, val auditor: Aud
     }
 }
 
-partial fn serve(val db: SqliteDb, listener: TcpListener, val logger: Logger, val auditor: AuditLogger, val router: Router) -> Unit ! DB + Log + Net + Audit {
+partial fn serve(val db: SqliteDb, listener: TcpListener, val logger: Logger, val auditor: AuditLogger, val router: Router) -> Unit ! DB + Log + Net + Audit + Trace {
     while true {
         match tcp_accept(listener) {
             Err(NetError::ConnectionReset) => {

@@ -14,3 +14,11 @@ version = "0.2.0"
 hash = "sha256:e9299bccffefba5712e5ba769cf760d4f235ec07c58f41a948ecc60235ad14c3"
 commit = "cdde87ab5650d79b3d8fcfdbdaae3bd1706c7cca"
 git = "https://github.com/mvl-lang/pkg-http"
+
+[[package]]
+name = "github.com/mvl-lang/pkg-trace"
+version = "0.2.1"
+hash = "sha256:a7fc4a43bbdfa943351e29b28512f1308ad860a614e9d83381efc30a80fd8fa8"
+commit = "fe6d04ea3e5898d39fbfdfaaf4fdce433d922a61"
+git = "https://github.com/mvl-lang/pkg-trace"
+license = "Apache-2.0"
