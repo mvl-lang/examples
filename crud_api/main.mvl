@@ -32,16 +32,16 @@ use handlers::{list_users_handler, get_user_handler, create_user_handler,
                update_user_handler, delete_user_handler}
 use pkg.http.{Method, Request, Response, HttpError, Router, MatchedRoute,
               parse_request, serialize_response, error_response,
-              new_router, route, dispatch,
+              new_router, route, dispatch, status_code,
               json_error, http_internal_error, method_name}
 use pkg.sqlite.{SqliteDb, close}
 use std.net.{TcpListener, TcpStream, NetError,
              tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, net_error_msg}
-use std.audit.{AuditLogger, file_audit_logger}
-use std.io.{path}
+use std.audit.{AuditLogger, AuditEvent, file_audit_logger, modify}
+use std.io.{path, IoError}
 use std.log.{Logger, default_logger, log_level_name, log_format_name}
-use std.runtime.{manifest, Manifest}
+use std.runtime.{manifest, Manifest, PackageInfo}
 use pkg.trace.{Trace, Tracer, default_tracer, trace_start, span_end, span_error, TraceContext}
 
 // ── Composite effect ──────────────────────────────────────────────────────────
@@ -57,6 +57,20 @@ effect AppIO > DB + Env + FileRead + FileWrite + Log + Net + Audit + Trace
 // the literal default port falls inside the IANA-valid TCP range.
 
 total fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int { p }
+
+fn format_packages(pkgs: List[PackageInfo]) -> String {
+    let result: ref String = "";
+    let first: ref Bool = true;
+    for p in pkgs {
+        if first {
+            first = false;
+            result = result.concat(p.name).concat("@").concat(p.version)
+        } else {
+            result = result.concat(",").concat(p.name).concat("@").concat(p.version)
+        }
+    }
+    result
+}
 
 // ── Router ────────────────────────────────────────────────────────────────────
 //
@@ -102,9 +116,15 @@ partial fn process_stream(val db: SqliteDb, val logger: Logger, val auditor: Aud
             json_error(http_internal_error("read error"))
         },
         Ok(raw) => match parse_request(raw) {
-            Err(e)      => error_response(e),
-            Ok(req)     => match dispatch(router, req) {
-                Err(e)      => error_response(e),
+            Err(e) => {
+                logger.warn("bad_request", {"status": "400", "error": e.detail, "trace_id": req_ctx.trace_id});
+                error_response(e)
+            },
+            Ok(req) => match dispatch(router, req) {
+                Err(e) => {
+                    logger.warn("not_found", {"status": status_code(e.status).to_string(), "error": e.detail, "method": method_name(req.method), "path": req.path, "trace_id": req_ctx.trace_id});
+                    error_response(e)
+                },
                 Ok(matched) => handle_request(db, logger, auditor, tracer, req_ctx, req, matched),
             },
         },
@@ -190,6 +210,10 @@ partial fn main() -> Unit ! AppIO {
     let router: Router = setup_router();
     let auditor: AuditLogger = file_audit_logger(path(cfg.audit_path));
     let tracer: Tracer = default_tracer();
+    let _: Result[Unit, IoError] = auditor.emit(
+        modify("system", "service", "start")
+            .with_details({"instance_id": boot_ctx.trace_id, "app": m.app_name, "version": m.app_version, "packages": format_packages(m.packages)})
+    );
 
     logger.info("settings", {
         "host":       cfg.host,

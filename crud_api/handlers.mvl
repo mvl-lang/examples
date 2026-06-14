@@ -72,12 +72,12 @@ pub partial fn list_users_handler(
     logger.debug("handler", {"action": "list_users", "trace_id": ctx.trace_id});
     let resp: Response = match db_list_users(db) {
         Err(e) => {
-            logger.error("db_error", {"action": "list_users", "error": e, "trace_id": ctx.trace_id});
+            logger.error("db_error", {"action": "list_users", "status": "500", "error": e, "trace_id": ctx.trace_id});
             let _: Result[Unit, IoError] = auditor.emit(access("api:anonymous", "users:collection").fail(e));
             json_error(http_internal_error("internal server error"))
         },
         Ok(users) => {
-            logger.info("success", {"action": "list_users", "count": users.len().to_string(), "trace_id": ctx.trace_id});
+            logger.info("success", {"action": "list_users", "status": "200", "count": users.len().to_string(), "trace_id": ctx.trace_id});
             let _: Result[Unit, IoError] = auditor.emit(access("api:anonymous", "users:collection")
                 .with_details({"count": users.len().to_string()}));
             json_ok_str(users_to_json(users))
@@ -108,17 +108,17 @@ pub partial fn get_user_handler(
             logger.debug("handler", {"action": "get_user", "id": id.to_string(), "trace_id": ctx.trace_id});
             match db_get_user(db, id) {
                 Err(e) => {
-                    logger.error("db_error", {"action": "get_user", "error": e, "trace_id": ctx.trace_id});
+                    logger.error("db_error", {"action": "get_user", "status": "500", "error": e, "trace_id": ctx.trace_id});
                     let _: Result[Unit, IoError] = auditor.emit(access("api:anonymous", resource).fail(e));
                     json_error(http_internal_error("internal server error"))
                 },
                 Ok(None) => {
-                    logger.info("not_found", {"action": "get_user", "id": id.to_string(), "trace_id": ctx.trace_id});
+                    logger.info("not_found", {"action": "get_user", "status": "404", "id": id.to_string(), "trace_id": ctx.trace_id});
                     let _: Result[Unit, IoError] = auditor.emit(deny("api:anonymous", resource, "not found"));
                     json_error(http_not_found("user not found"))
                 },
                 Ok(Some(user)) => {
-                    logger.info("success", {"action": "get_user", "id": id.to_string(), "trace_id": ctx.trace_id});
+                    logger.info("success", {"action": "get_user", "status": "200", "id": id.to_string(), "trace_id": ctx.trace_id});
                     let _: Result[Unit, IoError] = auditor.emit(access("api:anonymous", resource));
                     json_ok_str(user_to_json(user))
                 },
@@ -162,27 +162,27 @@ pub partial fn create_user_handler(
         Ok(create_req) => match db_create_user(db, create_req) {
             Err(msg) => {
                 if msg == "email already exists" {
-                    logger.warn("conflict", {"action": "create_user", "reason": msg, "trace_id": ctx.trace_id});
+                    logger.warn("conflict", {"action": "create_user", "status": "400", "reason": msg, "trace_id": ctx.trace_id});
                     let _: Result[Unit, IoError] = auditor.emit(deny("api:anonymous", "users:collection", msg));
                     json_error(http_bad_request(msg))
                 } else {
-                    logger.error("db_error", {"action": "create_user", "error": msg, "trace_id": ctx.trace_id});
+                    logger.error("db_error", {"action": "create_user", "status": "500", "error": msg, "trace_id": ctx.trace_id});
                     let _: Result[Unit, IoError] = auditor.emit(modify("api:anonymous", "users:collection", "create.user").fail(msg));
                     json_error(http_internal_error("internal server error"))
                 }
             },
             Ok(new_id) => match db_get_user(db, new_id) {
                 Err(e) => {
-                    logger.error("db_error", {"action": "create_user", "error": e, "trace_id": ctx.trace_id});
+                    logger.error("db_error", {"action": "create_user", "status": "500", "error": e, "trace_id": ctx.trace_id});
                     json_error(http_internal_error("internal server error"))
                 },
                 Ok(None) => {
-                    logger.error("inconsistent", {"action": "create_user", "id": new_id.to_string(), "trace_id": ctx.trace_id});
+                    logger.error("inconsistent", {"action": "create_user", "status": "500", "id": new_id.to_string(), "trace_id": ctx.trace_id});
                     json_error(http_internal_error("internal server error"))
                 },
                 Ok(Some(user)) => {
                     let resource: String = "user:".concat(user.id.to_string());
-                    logger.info("created", {"action": "create_user", "id": user.id.to_string(), "trace_id": ctx.trace_id});
+                    logger.info("created", {"action": "create_user", "status": "201", "id": user.id.to_string(), "trace_id": ctx.trace_id});
                     let _: Result[Unit, IoError] = auditor.emit(modify("api:anonymous", resource, "create.user")
                         .with_details({"email": user.email}));
                     json_created_str(user_to_json(user))
@@ -243,15 +243,15 @@ pub partial fn update_user_handler(
                 Ok(upd) => match apply_update(db, id, upd) {
                     resp => {
                         if status_code(resp.status) == 200 {
-                            logger.info("updated", {"action": "update_user", "id": id.to_string(), "trace_id": ctx.trace_id});
+                            logger.info("updated", {"action": "update_user", "status": "200", "id": id.to_string(), "trace_id": ctx.trace_id});
                             let _: Result[Unit, IoError] = auditor.emit(modify("api:anonymous", resource, "update.user"));
                             resp
                         } else if status_code(resp.status) == 404 {
-                            logger.info("not_found", {"action": "update_user", "id": id.to_string(), "trace_id": ctx.trace_id});
+                            logger.info("not_found", {"action": "update_user", "status": "404", "id": id.to_string(), "trace_id": ctx.trace_id});
                             let _: Result[Unit, IoError] = auditor.emit(deny("api:anonymous", resource, "not found"));
                             resp
                         } else {
-                            logger.error("db_error", {"action": "update_user", "id": id.to_string(), "trace_id": ctx.trace_id});
+                            logger.error("db_error", {"action": "update_user", "status": "500", "id": id.to_string(), "trace_id": ctx.trace_id});
                             let _: Result[Unit, IoError] = auditor.emit(modify("api:anonymous", resource, "update.user").fail("db error"));
                             resp
                         }
@@ -285,17 +285,17 @@ pub partial fn delete_user_handler(
             logger.debug("handler", {"action": "delete_user", "id": id.to_string(), "trace_id": ctx.trace_id});
             match db_delete_user(db, id) {
                 Err(e) => {
-                    logger.error("db_error", {"action": "delete_user", "error": e, "trace_id": ctx.trace_id});
+                    logger.error("db_error", {"action": "delete_user", "status": "500", "error": e, "trace_id": ctx.trace_id});
                     let _: Result[Unit, IoError] = auditor.emit(modify("api:anonymous", resource, "delete.user").fail(e));
                     json_error(http_internal_error("internal server error"))
                 },
                 Ok(false) => {
-                    logger.info("not_found", {"action": "delete_user", "id": id.to_string(), "trace_id": ctx.trace_id});
+                    logger.info("not_found", {"action": "delete_user", "status": "404", "id": id.to_string(), "trace_id": ctx.trace_id});
                     let _: Result[Unit, IoError] = auditor.emit(deny("api:anonymous", resource, "not found"));
                     json_error(http_not_found("user not found"))
                 },
                 Ok(true) => {
-                    logger.info("deleted", {"action": "delete_user", "id": id.to_string(), "trace_id": ctx.trace_id});
+                    logger.info("deleted", {"action": "delete_user", "status": "204", "id": id.to_string(), "trace_id": ctx.trace_id});
                     let _: Result[Unit, IoError] = auditor.emit(modify("api:anonymous", resource, "delete.user"));
                     json_no_content()
                 },
