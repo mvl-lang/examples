@@ -35,6 +35,8 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 # ── Build ──────────────────────────────────────────────────────────────────────
+guard-mvl:
+	$(MVL) --version > /dev/null 2>&1 || { echo "Run 'make build' from repo root first."; exit 1; }
 
 build: ## Build the application
 	$(MVL) build $(MVL_FLAGS) $(DIR)main.mvl
@@ -128,6 +130,10 @@ lint: ## Lint all source files
 	@for f in $(SRCS); do \
 		$(MVL) lint "$$f"; \
 	done
+
+# ── prove ────────────────────────────────────────────────────────────────────
+prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+	$(MVL) prove --verbose $(DIR)
 
 # ── Assurance ──────────────────────────────────────────────────────────────────
 

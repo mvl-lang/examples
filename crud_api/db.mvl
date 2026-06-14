@@ -33,8 +33,10 @@ pub total fn db_init(val db: SqliteDb) -> Result[Unit, String] ! DB {
 }
 
 // ── Row decoder ───────────────────────────────────────────────────────────────
+//
+// Pure transformation — marked `total` for termination proof.
 
-fn row_to_user(row: Map[String, DbValue]) -> Option[User] {
+total fn row_to_user(row: Map[String, DbValue]) -> Option[User] {
     match row.get("id") {
         Some(DbValue::Int(id)) => {
             match row.get("name") {

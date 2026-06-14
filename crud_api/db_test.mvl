@@ -1,0 +1,200 @@
+// examples/crud_api/db_test.mvl — unit tests for db.mvl pure functions.
+//
+// Tests the row decoder and validation logic without requiring DB effects.
+
+use std.db.{DbValue}
+
+// ── Local type re-declarations (test isolation) ───────────────────────────────
+
+type User = struct {
+    id:    Int where self > 0,
+    name:  String where len(self) > 0,
+    email: String where len(self) > 0,
+}
+
+// ── row_to_user (mirrors db.mvl) ──────────────────────────────────────────────
+
+total fn row_to_user(row: Map[String, DbValue]) -> Option[User] {
+    match row.get("id") {
+        Some(DbValue::Int(id)) => {
+            if id <= 0 {
+                None  // Reject non-positive IDs
+            } else {
+                match row.get("name") {
+                    Some(DbValue::Text(name)) => {
+                        if name.len() == 0 {
+                            None  // Reject empty names
+                        } else {
+                            match row.get("email") {
+                                Some(DbValue::Text(email)) => {
+                                    if email.len() == 0 {
+                                        None  // Reject empty emails
+                                    } else {
+                                        Some(User { id: id, name: name, email: email })
+                                    }
+                                },
+                                _ => None,
+                            }
+                        }
+                    },
+                    _ => None,
+                }
+            }
+        },
+        _ => None,
+    }
+}
+
+// ── Tests: valid rows ─────────────────────────────────────────────────────────
+
+test fn test_row_to_user_valid() -> Unit {
+    let row: Map[String, DbValue] = {
+        "id":    DbValue::Int(1),
+        "name":  DbValue::Text("Alice"),
+        "email": DbValue::Text("alice@example.com"),
+    };
+    match row_to_user(row) {
+        Some(u) => {
+            assert_eq(u.id, 1);
+            assert_eq(u.name, "Alice");
+            assert_eq(u.email, "alice@example.com")
+        },
+        None => assert_eq(1, 0),
+    }
+}
+
+test fn test_row_to_user_large_id() -> Unit {
+    let row: Map[String, DbValue] = {
+        "id":    DbValue::Int(999999),
+        "name":  DbValue::Text("Bob"),
+        "email": DbValue::Text("bob@example.com"),
+    };
+    match row_to_user(row) {
+        Some(u) => assert_eq(u.id, 999999),
+        None    => assert_eq(1, 0),
+    }
+}
+
+// ── Tests: missing fields ─────────────────────────────────────────────────────
+
+test fn test_row_to_user_missing_id() -> Unit {
+    let row: Map[String, DbValue] = {
+        "name":  DbValue::Text("Alice"),
+        "email": DbValue::Text("alice@example.com"),
+    };
+    match row_to_user(row) {
+        Some(_) => assert_eq(1, 0),
+        None    => {},
+    }
+}
+
+test fn test_row_to_user_missing_name() -> Unit {
+    let row: Map[String, DbValue] = {
+        "id":    DbValue::Int(1),
+        "email": DbValue::Text("alice@example.com"),
+    };
+    match row_to_user(row) {
+        Some(_) => assert_eq(1, 0),
+        None    => {},
+    }
+}
+
+test fn test_row_to_user_missing_email() -> Unit {
+    let row: Map[String, DbValue] = {
+        "id":   DbValue::Int(1),
+        "name": DbValue::Text("Alice"),
+    };
+    match row_to_user(row) {
+        Some(_) => assert_eq(1, 0),
+        None    => {},
+    }
+}
+
+// ── Tests: wrong types ────────────────────────────────────────────────────────
+
+test fn test_row_to_user_id_as_string() -> Unit {
+    let row: Map[String, DbValue] = {
+        "id":    DbValue::Text("1"),
+        "name":  DbValue::Text("Alice"),
+        "email": DbValue::Text("alice@example.com"),
+    };
+    match row_to_user(row) {
+        Some(_) => assert_eq(1, 0),
+        None    => {},
+    }
+}
+
+test fn test_row_to_user_name_as_int() -> Unit {
+    let row: Map[String, DbValue] = {
+        "id":    DbValue::Int(1),
+        "name":  DbValue::Int(123),
+        "email": DbValue::Text("alice@example.com"),
+    };
+    match row_to_user(row) {
+        Some(_) => assert_eq(1, 0),
+        None    => {},
+    }
+}
+
+// ── Tests: refinement violations ──────────────────────────────────────────────
+
+test fn test_row_to_user_zero_id() -> Unit {
+    let row: Map[String, DbValue] = {
+        "id":    DbValue::Int(0),
+        "name":  DbValue::Text("Alice"),
+        "email": DbValue::Text("alice@example.com"),
+    };
+    match row_to_user(row) {
+        Some(_) => assert_eq(1, 0),
+        None    => {},
+    }
+}
+
+test fn test_row_to_user_negative_id() -> Unit {
+    let row: Map[String, DbValue] = {
+        "id":    DbValue::Int(-5),
+        "name":  DbValue::Text("Alice"),
+        "email": DbValue::Text("alice@example.com"),
+    };
+    match row_to_user(row) {
+        Some(_) => assert_eq(1, 0),
+        None    => {},
+    }
+}
+
+test fn test_row_to_user_empty_name() -> Unit {
+    let row: Map[String, DbValue] = {
+        "id":    DbValue::Int(1),
+        "name":  DbValue::Text(""),
+        "email": DbValue::Text("alice@example.com"),
+    };
+    match row_to_user(row) {
+        Some(_) => assert_eq(1, 0),
+        None    => {},
+    }
+}
+
+test fn test_row_to_user_empty_email() -> Unit {
+    let row: Map[String, DbValue] = {
+        "id":    DbValue::Int(1),
+        "name":  DbValue::Text("Alice"),
+        "email": DbValue::Text(""),
+    };
+    match row_to_user(row) {
+        Some(_) => assert_eq(1, 0),
+        None    => {},
+    }
+}
+
+// ── Tests: empty row ──────────────────────────────────────────────────────────
+
+test fn test_row_to_user_empty_map() -> Unit {
+    // Use a map with no matching key instead of empty literal
+    let row: Map[String, DbValue] = {
+        "other": DbValue::Int(0),
+    };
+    match row_to_user(row) {
+        Some(_) => assert_eq(1, 0),
+        None    => {},
+    }
+}

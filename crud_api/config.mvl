@@ -32,8 +32,10 @@ pub type ConfigLoadError = enum {
 }
 
 // ── Layer 1: compiled-in defaults ─────────────────────────────────────────────
+//
+// Pure transformation — marked `total` for termination proof.
 
-fn defaults() -> ConfigValue {
+total fn defaults() -> ConfigValue {
     ConfigValue::Map({
         "host":       ConfigValue::String("127.0.0.1"),
         "port":       ConfigValue::Int(8080),

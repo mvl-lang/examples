@@ -55,11 +55,13 @@ effect AppIO > DB + Env + FileRead + FileWrite + Log + Net + Audit
 // Req 10 (Refinements) — `where` predicates carry a static guarantee that
 // the literal default port falls inside the IANA-valid TCP range.
 
-fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int { p }
+total fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int { p }
 
 // ── Router ────────────────────────────────────────────────────────────────────
+//
+// Pure transformation — marked `total` for termination proof.
 
-fn setup_router() -> Router {
+total fn setup_router() -> Router {
     let r: Router = new_router();
     let r: Router = route(r, Method::Get,    "/users",      "list_users");
     let r: Router = route(r, Method::Post,   "/users",      "create_user");
