@@ -11,7 +11,7 @@
 #   make clean                   # Remove build artifacts
 
 .PHONY: help build run run-dev run-json test test-unit test-api test-api-list test-api-crud
-.PHONY: seed db-reset audit-tail audit-clear fmt check lint assurance smoke clean
+.PHONY: seed db-reset audit-tail audit-clear fmt check lint prove assurance assurance-verbose coverage smoke clean
 
 .DEFAULT_GOAL := help
 
@@ -142,6 +142,9 @@ assurance: ## Generate assurance report
 
 assurance-verbose: ## Generate verbose assurance report
 	$(MVL) assurance $(MVL_FLAGS) --verbose $(DIR)
+
+coverage: ## Generate coverage report
+	$(MVL) test $(MVL_FLAGS) --coverage $(DIR)
 
 # ── Clean ──────────────────────────────────────────────────────────────────────
 

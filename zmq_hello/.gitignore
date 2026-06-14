@@ -1,0 +1,5 @@
+# Local package overrides (make local-pkg)
+.mvl/
+
+# Build artifacts
+target/

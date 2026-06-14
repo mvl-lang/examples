@@ -14,15 +14,15 @@
 #   make test-all      — run all test modes
 #   make check         — type-check all MVL sources
 #
-# Packages are resolved from the XDG cache ($XDG_DATA_HOME/mvl/pkg/).
-# Run `mvl install` from the repo root to populate the cache before using this example.
-.PHONY: help guard-mvl guard-pyzmq check prove build test test-zmq test-rust \
-        test-pushpull test-pubsub test-all run run-zmtp clean smoke test-solver assurance
+.PHONY: help guard-mvl guard-pyzmq check prove fmt lint build test test-zmq test-rust \
+        test-pushpull test-pubsub test-all run run-zmtp clean smoke test-solver \
+        assurance assurance-verbose coverage local-pkg unlink-pkg
 
 .DEFAULT_GOAL := help
 
-MVL  := ../../target/debug/mvl
-DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MVL       := mvl
+MVL_FLAGS := --stdlib=proven
+DIR       := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PORT      := 5555
 PORT_ZMTP := 5556
 PORT_PULL := 5557
@@ -51,26 +51,29 @@ guard-pyzmq: ## Ensure pyzmq is installed in the active venv
 # Pre-build all MVL binaries so `mvl run` is instant (cached cargo build).
 build: guard-mvl ## Build all MVL binaries
 	@echo "  Building MVL binaries..."
-	@$(MVL) build $(DIR)server.mvl > /dev/null 2>&1
-	@$(MVL) build $(DIR)server_zmtp.mvl > /dev/null 2>&1
-	@$(MVL) build $(DIR)server_pull.mvl > /dev/null 2>&1
-	@$(MVL) build $(DIR)client_sub.mvl > /dev/null 2>&1
+	@$(MVL) build $(MVL_FLAGS) $(DIR)server.mvl > /dev/null 2>&1
+	@$(MVL) build $(MVL_FLAGS) $(DIR)server_zmtp.mvl > /dev/null 2>&1
+	@$(MVL) build $(MVL_FLAGS) $(DIR)server_pull.mvl > /dev/null 2>&1
+	@$(MVL) build $(MVL_FLAGS) $(DIR)client_sub.mvl > /dev/null 2>&1
 
 check: guard-mvl ## Type-check all MVL sources
-	$(MVL) check $(DIR)server.mvl
-	$(MVL) check $(DIR)server_zmtp.mvl
-	$(MVL) check $(DIR)server_pull.mvl
-	$(MVL) check $(DIR)client_sub.mvl
+	$(MVL) check $(MVL_FLAGS) $(DIR)
 
 prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
-	$(MVL) prove $(DIR)
+	$(MVL) prove $(MVL_FLAGS) $(DIR)
+
+fmt: guard-mvl ## Format all MVL sources
+	$(MVL) fmt $(DIR)
+
+lint: guard-mvl ## Lint all MVL sources
+	$(MVL) lint $(MVL_FLAGS) $(DIR)
 
 test-solver: guard-mvl ## Show solver statistics
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
 	for f in $(DIR)server.mvl $(DIR)server_zmtp.mvl $(DIR)server_pull.mvl $(DIR)client_sub.mvl; do \
 		name=$$(basename "$$f"); \
-		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
+		out=$$($(MVL) check $(MVL_FLAGS) "$$f" 2>&1); rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			printf "  $$OK  %s\n" "$$name"; pass=$$((pass + 1)); \
 		else \
@@ -97,7 +100,7 @@ test: build ## Simplified REQ/REP: MVL server + raw Python client
 		fi; \
 	}; \
 	trap cleanup EXIT INT TERM; \
-	$(MVL) run $(DIR)server.mvl > /tmp/zmq_hello_server.log 2>&1 & \
+	$(MVL) run $(MVL_FLAGS) $(DIR)server.mvl > /tmp/zmq_hello_server.log 2>&1 & \
 	SERVER_PID=$$!; \
 	elapsed=0; \
 	until nc -z 127.0.0.1 $(PORT) 2>/dev/null; do \
@@ -138,7 +141,7 @@ test-zmq: build guard-pyzmq ## ZMTP REQ/REP: MVL server + pyzmq client
 		fi; \
 	}; \
 	trap cleanup EXIT INT TERM; \
-	$(MVL) run $(DIR)server_zmtp.mvl > /tmp/zmq_hello_zmtp.log 2>&1 & \
+	$(MVL) run $(MVL_FLAGS) $(DIR)server_zmtp.mvl > /tmp/zmq_hello_zmtp.log 2>&1 & \
 	SERVER_PID=$$!; \
 	elapsed=0; \
 	until nc -z 127.0.0.1 $(PORT_ZMTP) 2>/dev/null; do \
@@ -178,7 +181,7 @@ test-rust: build ## ZMTP REQ/REP: MVL server + Rust zmq client
 		fi; \
 	}; \
 	trap cleanup EXIT INT TERM; \
-	$(MVL) run $(DIR)server_zmtp.mvl > /tmp/zmq_hello_zmtp.log 2>&1 & \
+	$(MVL) run $(MVL_FLAGS) $(DIR)server_zmtp.mvl > /tmp/zmq_hello_zmtp.log 2>&1 & \
 	SERVER_PID=$$!; \
 	elapsed=0; \
 	until nc -z 127.0.0.1 $(PORT_ZMTP) 2>/dev/null; do \
@@ -220,7 +223,7 @@ test-pushpull: build guard-pyzmq ## ZMTP PUSH/PULL: MVL PULL server + pyzmq PUSH
 		fi; \
 	}; \
 	trap cleanup EXIT INT TERM; \
-	$(MVL) run $(DIR)server_pull.mvl > /tmp/zmq_hello_pull.log 2>&1 & \
+	$(MVL) run $(MVL_FLAGS) $(DIR)server_pull.mvl > /tmp/zmq_hello_pull.log 2>&1 & \
 	SERVER_PID=$$!; \
 	elapsed=0; \
 	until nc -z 127.0.0.1 $(PORT_PULL) 2>/dev/null; do \
@@ -279,7 +282,7 @@ test-pubsub: build guard-pyzmq ## ZMTP PUB/SUB: pyzmq PUB server + MVL SUB clien
 		fi; \
 	done; \
 	echo "  zmq_hello [pub/sub]: PUB server ready — running MVL SUB client..."; \
-	CLIENT_OUT=$$(timeout 15 $(MVL) run $(DIR)client_sub.mvl 2>&1); RC=$$?; \
+	CLIENT_OUT=$$(timeout 15 $(MVL) run $(MVL_FLAGS) $(DIR)client_sub.mvl 2>&1); RC=$$?; \
 	RECVD=$$(echo "$$CLIENT_OUT" | grep -c "^ recv:"); \
 	if [ "$$RECVD" -ne 3 ]; then \
 		echo "  ERROR: expected 3 received messages, got $$RECVD"; \
@@ -295,22 +298,49 @@ test-pubsub: build guard-pyzmq ## ZMTP PUB/SUB: pyzmq PUB server + MVL SUB clien
 
 test-all: test test-zmq test-rust test-pushpull test-pubsub ## Run all test modes
 
-assurance: guard-mvl ## Assurance report for all MVL sources
-	$(MVL) assurance $(DIR)
+assurance: guard-mvl ## Generate assurance report
+	$(MVL) assurance $(MVL_FLAGS) $(DIR)
+
+assurance-verbose: guard-mvl ## Generate verbose assurance report
+	$(MVL) assurance $(MVL_FLAGS) --verbose $(DIR)
+
+coverage: guard-mvl ## Generate coverage report
+	$(MVL) coverage $(MVL_FLAGS) $(DIR)
 
 smoke: build ## Smoke-test: verify all MVL binaries compile
 	@echo "  \033[32m✓  all MVL binaries built successfully\033[0m"
 
 run: build ## Start the simplified REP server (Ctrl-C to stop)
-	$(MVL) run $(DIR)server.mvl
+	$(MVL) run $(MVL_FLAGS) $(DIR)server.mvl
 
 run-zmtp: build ## Start the ZMTP REP server (Ctrl-C to stop)
-	$(MVL) run $(DIR)server_zmtp.mvl
+	$(MVL) run $(MVL_FLAGS) $(DIR)server_zmtp.mvl
 
 run-pull: build ## Start the ZMTP PULL server (Ctrl-C to stop)
-	$(MVL) run $(DIR)server_pull.mvl
+	$(MVL) run $(MVL_FLAGS) $(DIR)server_pull.mvl
 
-clean: ## Remove temporary log files and .mvl symlinks
+# ── Local package overrides ───────────────────────────────────────────────────
+# Symlink .mvl/pkg/<name> → ~/wc/pkg-zmq so the compiler uses your local checkout.
+
+PKG_ZMQ_LOCAL := $(HOME)/wc/pkg-zmq
+PKG_ZMQ_LINK  := $(DIR).mvl/pkg/github.com_mvl-lang_pkg-zmq
+
+local-pkg: ## Symlink pkg-zmq to ~/wc/pkg-zmq (local dev override)
+	@mkdir -p $(DIR).mvl/pkg
+	@if [ -L "$(PKG_ZMQ_LINK)" ]; then \
+		echo "  already linked: $(PKG_ZMQ_LINK) → $$(readlink $(PKG_ZMQ_LINK))"; \
+	else \
+		ln -s $(PKG_ZMQ_LOCAL) $(PKG_ZMQ_LINK); \
+		echo "  linked: $(PKG_ZMQ_LINK) → $(PKG_ZMQ_LOCAL)"; \
+	fi
+
+unlink-pkg: ## Remove local pkg-zmq symlink (revert to cached version)
+	@rm -f $(PKG_ZMQ_LINK)
+	@echo "  removed: $(PKG_ZMQ_LINK)"
+
+# ── Clean ─────────────────────────────────────────────────────────────────────
+
+clean: ## Remove temporary log files and .mvl overrides
 	rm -f /tmp/zmq_hello_server.log /tmp/zmq_hello_zmtp.log
 	rm -f /tmp/zmq_hello_pull.log /tmp/zmq_hello_pub.log
 	rm -rf .mvl

@@ -1,0 +1,9 @@
+# Local package overrides
+.mvl/
+
+# Build artifacts
+target/
+
+# Runtime files
+*.db
+*.jsonl
