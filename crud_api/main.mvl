@@ -72,6 +72,12 @@ fn format_packages(pkgs: List[PackageInfo]) -> String {
     result
 }
 
+fn log_packages(val logger: Logger, pkgs: List[PackageInfo]) -> Unit ! Log {
+    for p in pkgs {
+        logger.info("package", {"purl": p.purl})
+    }
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 //
 // Pure transformation — marked `total` for termination proof.
@@ -187,15 +193,12 @@ partial fn main() -> Unit ! AppIO {
         "service_id": boot_ctx.trace_id,
     });
     logger.info("versions", {
-        "mvl":        m.mvl_version,
-        "runtime":    m.runtime_version,
-        "stdlib":     m.stdlib_version,
-        "service_id": boot_ctx.trace_id,
+        "mvl":     m.mvl_version,
+        "runtime": m.runtime_version,
+        "stdlib":  m.stdlib_version,
     });
-    logger.info("source", {
-        "digest":     m.source_digest,
-        "service_id": boot_ctx.trace_id,
-    });
+    log_packages(logger, m.packages);
+    logger.info("source", {"digest": m.source_digest});
 
     let db: SqliteDb = match db_open(cfg.db_path) {
         Err(msg) => { logger.error("db open failed", {"error": msg}); return },
@@ -215,15 +218,10 @@ partial fn main() -> Unit ! AppIO {
             .with_details({"instance_id": boot_ctx.trace_id, "app": m.app_name, "version": m.app_version, "packages": format_packages(m.packages)})
     );
 
-    logger.info("settings", {
-        "host":       cfg.host,
-        "port":       cfg.port.to_string(),
-        "log_level":  log_level_name(cfg.log_level),
-        "log_format": log_format_name(cfg.log_format),
-        "db_path":    cfg.db_path,
-        "audit_path": cfg.audit_path,
-        "service_id": boot_ctx.trace_id,
-    });
+    logger.info("server",   {"host": cfg.host, "port": cfg.port.to_string()});
+    logger.info("logging",  {"log_level": log_level_name(cfg.log_level), "log_format": log_format_name(cfg.log_format)});
+    logger.info("database", {"db_path": cfg.db_path});
+    logger.info("audit",    {"audit_path": cfg.audit_path});
 
     if cfg.seed_file != "" {
         logger.info("seeding from CSV", {"path": cfg.seed_file});
