@@ -28,7 +28,7 @@ use pkg.sqlite.{SqliteDb}
 use std.io.{IoError}
 use std.log.{Logger}
 use std.audit.{AuditLogger, AuditEvent, modify, access, deny}
-use pkg.trace.{span_start, span_end, TraceContext}
+use pkg.trace.{Trace, Tracer, span_start, span_end, TraceContext}
 
 // ── JSON encoding helpers ─────────────────────────────────────────────────────
 //
@@ -63,6 +63,7 @@ pub partial fn list_users_handler(
     val db: SqliteDb,
     val logger: Logger,
     val auditor: AuditLogger,
+    val tracer: Tracer,
     val ctx: TraceContext,
     val req: Request,
     val matched: MatchedRoute
@@ -82,7 +83,7 @@ pub partial fn list_users_handler(
             json_ok_str(users_to_json(users))
         },
     };
-    span_end(span);
+    span_end(tracer, span);
     resp
 }
 
@@ -94,6 +95,7 @@ pub partial fn get_user_handler(
     val db: SqliteDb,
     val logger: Logger,
     val auditor: AuditLogger,
+    val tracer: Tracer,
     val ctx: TraceContext,
     val req: Request,
     val matched: MatchedRoute
@@ -123,7 +125,7 @@ pub partial fn get_user_handler(
             }
         },
     };
-    span_end(span);
+    span_end(tracer, span);
     resp
 }
 
@@ -148,6 +150,7 @@ pub partial fn create_user_handler(
     val db: SqliteDb,
     val logger: Logger,
     val auditor: AuditLogger,
+    val tracer: Tracer,
     val ctx: TraceContext,
     val req: Request,
     val matched: MatchedRoute
@@ -187,7 +190,7 @@ pub partial fn create_user_handler(
             },
         },
     };
-    span_end(span);
+    span_end(tracer, span);
     resp
 }
 
@@ -224,6 +227,7 @@ pub partial fn update_user_handler(
     val db: SqliteDb,
     val logger: Logger,
     val auditor: AuditLogger,
+    val tracer: Tracer,
     val ctx: TraceContext,
     val req: Request,
     val matched: MatchedRoute
@@ -256,7 +260,7 @@ pub partial fn update_user_handler(
             }
         },
     };
-    span_end(span);
+    span_end(tracer, span);
     resp
 }
 
@@ -268,6 +272,7 @@ pub partial fn delete_user_handler(
     val db: SqliteDb,
     val logger: Logger,
     val auditor: AuditLogger,
+    val tracer: Tracer,
     val ctx: TraceContext,
     val req: Request,
     val matched: MatchedRoute
@@ -297,6 +302,6 @@ pub partial fn delete_user_handler(
             }
         },
     };
-    span_end(span);
+    span_end(tracer, span);
     resp
 }

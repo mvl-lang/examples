@@ -17,8 +17,7 @@ git = "https://github.com/mvl-lang/pkg-http"
 
 [[package]]
 name = "github.com/mvl-lang/pkg-trace"
-version = "0.2.1"
-hash = "sha256:a7fc4a43bbdfa943351e29b28512f1308ad860a614e9d83381efc30a80fd8fa8"
-commit = "fe6d04ea3e5898d39fbfdfaaf4fdce433d922a61"
+version = "0.3.0"
+hash = "sha256:d2d84dca21b3938637eb9e5f171e176a19b469f21e372ea0fe8828bd839726c0"
+commit = "9957a4d952a1031cce091cad1c876dc7b9be1065"
 git = "https://github.com/mvl-lang/pkg-trace"
-license = "Apache-2.0"

@@ -42,7 +42,7 @@ use std.audit.{AuditLogger, file_audit_logger}
 use std.io.{path}
 use std.log.{Logger, default_logger, log_level_name, log_format_name}
 use std.runtime.{manifest, Manifest}
-use pkg.trace.{trace_start, span_end, span_error, TraceContext}
+use pkg.trace.{Trace, Tracer, default_tracer, trace_start, span_end, span_error, TraceContext}
 
 // ── Composite effect ──────────────────────────────────────────────────────────
 //
@@ -73,14 +73,14 @@ total fn setup_router() -> Router {
 
 // ── Per-request dispatch ──────────────────────────────────────────────────────
 
-partial fn handle_request(val db: SqliteDb, val logger: Logger, val auditor: AuditLogger, val ctx: TraceContext, req: Request, matched: MatchedRoute) -> Response ! DB + Log + Audit + Trace {
+partial fn handle_request(val db: SqliteDb, val logger: Logger, val auditor: AuditLogger, val tracer: Tracer, val ctx: TraceContext, req: Request, matched: MatchedRoute) -> Response ! DB + Log + Audit + Trace {
     logger.debug("dispatch", {"route": matched.name, "method": method_name(req.method), "path": req.path, "trace_id": ctx.trace_id});
     match matched.name {
-        "list_users"  => list_users_handler(db, logger, auditor, ctx, req, matched),
-        "get_user"    => get_user_handler(db, logger, auditor, ctx, req, matched),
-        "create_user" => create_user_handler(db, logger, auditor, ctx, req, matched),
-        "update_user" => update_user_handler(db, logger, auditor, ctx, req, matched),
-        "delete_user" => delete_user_handler(db, logger, auditor, ctx, req, matched),
+        "list_users"  => list_users_handler(db, logger, auditor, tracer, ctx, req, matched),
+        "get_user"    => get_user_handler(db, logger, auditor, tracer, ctx, req, matched),
+        "create_user" => create_user_handler(db, logger, auditor, tracer, ctx, req, matched),
+        "update_user" => update_user_handler(db, logger, auditor, tracer, ctx, req, matched),
+        "delete_user" => delete_user_handler(db, logger, auditor, tracer, ctx, req, matched),
         _             => json_error(http_internal_error("unknown route")),
     }
 }
@@ -94,7 +94,7 @@ partial fn handle_request(val db: SqliteDb, val logger: Logger, val auditor: Aud
 // iteration without consuming it.  Fatal accept errors close the listener
 // and return early; transient errors (reset, timeout) just continue.
 
-partial fn process_stream(val db: SqliteDb, val logger: Logger, val auditor: AuditLogger, val router: Router, stream: TcpStream) -> Unit ! DB + Log + Net + Audit + Trace {
+partial fn process_stream(val db: SqliteDb, val logger: Logger, val auditor: AuditLogger, val tracer: Tracer, val router: Router, stream: TcpStream) -> Unit ! DB + Log + Net + Audit + Trace {
     let req_ctx: TraceContext = trace_start("http.request");
     let resp: Response = match tcp_read_request(stream) {
         Err(e)  => {
@@ -105,25 +105,25 @@ partial fn process_stream(val db: SqliteDb, val logger: Logger, val auditor: Aud
             Err(e)      => error_response(e),
             Ok(req)     => match dispatch(router, req) {
                 Err(e)      => error_response(e),
-                Ok(matched) => handle_request(db, logger, auditor, req_ctx, req, matched),
+                Ok(matched) => handle_request(db, logger, auditor, tracer, req_ctx, req, matched),
             },
         },
     };
     match tcp_write(stream, serialize_response(resp)) {
         Ok(_)  => {
-            span_end(req_ctx);
+            span_end(tracer, req_ctx);
             tcp_close_stream(stream)
         },
         Err(e) => {
             let emsg: String = net_error_msg(e);
             logger.error("write error", {"error": emsg, "trace_id": req_ctx.trace_id});
-            span_error(req_ctx, emsg);
+            span_error(tracer, req_ctx, emsg);
             tcp_close_stream(stream)
         },
     }
 }
 
-partial fn serve(val db: SqliteDb, listener: TcpListener, val logger: Logger, val auditor: AuditLogger, val router: Router) -> Unit ! DB + Log + Net + Audit + Trace {
+partial fn serve(val db: SqliteDb, listener: TcpListener, val logger: Logger, val auditor: AuditLogger, val tracer: Tracer, val router: Router) -> Unit ! DB + Log + Net + Audit + Trace {
     while true {
         match tcp_accept(listener) {
             Err(NetError::ConnectionReset) => {
@@ -137,7 +137,7 @@ partial fn serve(val db: SqliteDb, listener: TcpListener, val logger: Logger, va
                 tcp_close_listener(listener);
                 return
             },
-            Ok(stream) => process_stream(db, logger, auditor, router, stream),
+            Ok(stream) => process_stream(db, logger, auditor, tracer, router, stream),
         }
     }
 }
@@ -189,6 +189,7 @@ partial fn main() -> Unit ! AppIO {
 
     let router: Router = setup_router();
     let auditor: AuditLogger = file_audit_logger(path(cfg.audit_path));
+    let tracer: Tracer = default_tracer();
 
     logger.info("settings", {
         "host":       cfg.host,
@@ -209,10 +210,10 @@ partial fn main() -> Unit ! AppIO {
     } else {}
 
     logger.info("listening", {"status": "ready", "service_id": boot_ctx.trace_id});
-    span_end(boot_ctx);
+    span_end(tracer, boot_ctx);
 
     match tcp_listen(cfg.host, cfg.port) {
         Err(e) => logger.error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => serve(db, listener, logger, auditor, router),
+        Ok(listener) => serve(db, listener, logger, auditor, tracer, router),
     }
 }
