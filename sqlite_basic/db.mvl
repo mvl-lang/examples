@@ -1,0 +1,178 @@
+// examples/sqlite_basic/db.mvl — SQLite CRUD operations for the User entity.
+//
+// All query functions take a `SqliteDb` value — the caller retains ownership
+// and passes it to each operation in sequence.
+//
+// Effects: ! DB (+ FileRead + FileWrite for db_open only).
+
+use models::{User, CreateUserRequest}
+use pkg.sqlite.{SqliteDb, SqliteError, open, execute, query, query_scalar, query_by_min_age}
+use std.db.{DbValue}
+
+// ── Open / init ───────────────────────────────────────────────────────────────
+
+/// Open (or create) the SQLite database at `path`.  Use ":memory:" for tests.
+pub partial fn db_open(path: String) -> Result[SqliteDb, String] ! DB + FileRead + FileWrite {
+    match open(path) {
+        Err(SqliteError::Other(msg)) => Err("db open failed: ".concat(msg)),
+        Err(_)                       => Err("db open failed"),
+        Ok(db)                       => Ok(db),
+    }
+}
+
+/// Create the users table if it does not exist.
+pub total fn db_init(val db: SqliteDb) -> Result[Unit, String] ! DB {
+    match execute(db,
+        "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, age INTEGER NOT NULL)",
+        []) {
+        Err(SqliteError::InvalidSql(msg)) => Err("schema init failed: ".concat(msg)),
+        Err(_)                            => Err("schema init failed"),
+        Ok(_)                             => Ok(()),
+    }
+}
+
+// ── Row decoder ───────────────────────────────────────────────────────────────
+
+/// Decode a raw result row into a User.
+/// Returns None if required fields are missing, have unexpected types, or
+/// violate the User refinement invariants (id > 0, non-empty name, age >= 0).
+total fn row_to_user(row: Map[String, DbValue]) -> Option[User] {
+    match row.get("id") {
+        Some(DbValue::Int(id)) => {
+            if id <= 0 {
+                None
+            } else {
+                match row.get("name") {
+                    Some(DbValue::Text(name)) => {
+                        if name.len() == 0 {
+                            None
+                        } else {
+                            match row.get("age") {
+                                Some(DbValue::Int(age)) => {
+                                    if age < 0 {
+                                        None
+                                    } else {
+                                        Some(User { id: id, name: name, age: age })
+                                    }
+                                },
+                                _ => None,
+                            }
+                        }
+                    },
+                    _ => None,
+                }
+            }
+        },
+        _ => None,
+    }
+}
+
+/// Collect raw rows into a `List[User]`, silently skipping undecodable rows.
+total fn collect_users(rows: List[Map[String, DbValue]]) -> List[User] {
+    let users: ref List[User] = [];
+    let i: ref Int = 0;
+    let n: Int = rows.len();
+    while i < n decreases n - i {
+        match rows.get(i) {
+            None      => {},
+            Some(row) => match row_to_user(row) {
+                None    => {},
+                Some(u) => users.push(u),
+            },
+        }
+        i = i + 1
+    }
+    users
+}
+
+// ── Shared helper ─────────────────────────────────────────────────────────────
+
+/// Returns true if the last statement affected at least one row.
+partial fn had_changes(val db: SqliteDb) -> Result[Bool, String] ! DB {
+    match query_scalar(db, "SELECT changes()", []) {
+        Err(_)                => Err("changes() failed"),
+        Ok(DbValue::Int(n))   => Ok(n > 0),
+        Ok(DbValue::Float(f)) => Ok(f.to_int() > 0),
+        Ok(_)                 => Err("unexpected changes() type"),
+    }
+}
+
+// ── CRUD ──────────────────────────────────────────────────────────────────────
+
+/// Insert a new user and return the assigned row id.
+pub partial fn db_insert(val db: SqliteDb, val req: CreateUserRequest) -> Result[Int, String] ! DB {
+    match execute(db,
+        "INSERT INTO users (name, age) VALUES (?, ?)",
+        [DbValue::Text(req.name), DbValue::Int(req.age)]) {
+        Err(_) => Err("insert failed"),
+        Ok(_)  => {
+            match query_scalar(db, "SELECT last_insert_rowid()", []) {
+                Err(_)                => Err("failed to read inserted id"),
+                Ok(DbValue::Int(n))   => Ok(n),
+                Ok(DbValue::Float(f)) => Ok(f.to_int()),
+                Ok(_)                 => Err("unexpected id type"),
+            }
+        },
+    }
+}
+
+/// List all users ordered by id.
+pub partial fn db_list(val db: SqliteDb) -> Result[List[User], String] ! DB {
+    match query(db, "SELECT id, name, age FROM users ORDER BY id", []) {
+        Err(_)   => Err("list query failed"),
+        Ok(rows) => Ok(collect_users(rows)),
+    }
+}
+
+/// Get a single user by id.  Returns None if the id does not exist.
+pub partial fn db_get(val db: SqliteDb, id: Int) -> Result[Option[User], String] ! DB {
+    match query(db, "SELECT id, name, age FROM users WHERE id = ?", [DbValue::Int(id)]) {
+        Err(_)   => Err("get query failed"),
+        Ok(rows) => match rows.get(0) {
+            None      => Ok(None),
+            Some(row) => Ok(row_to_user(row)),
+        },
+    }
+}
+
+/// Return all users whose age is greater than or equal to `min_age`.
+/// Uses pkg-sqlite's refined `query_by_min_age` — the refinement type
+/// `min_age >= 0` is checked by the compiler at every call site.
+pub partial fn db_list_older_than(val db: SqliteDb, min_age: Int where min_age >= 0) -> Result[List[User], String] ! DB {
+    match query_by_min_age(db, min_age) {
+        Err(_)   => Err("age filter query failed"),
+        Ok(rows) => Ok(collect_users(rows)),
+    }
+}
+
+/// Update a user's age.
+/// Returns true if a row was updated, false if the id does not exist.
+pub partial fn db_update_age(val db: SqliteDb, id: Int, age: Int where age >= 0) -> Result[Bool, String] ! DB {
+    match execute(db,
+        "UPDATE users SET age = ? WHERE id = ?",
+        [DbValue::Int(age), DbValue::Int(id)]) {
+        Err(_) => Err("update failed"),
+        Ok(_)  => had_changes(db),
+    }
+}
+
+/// Delete a user by id.
+/// Returns true if a row was deleted, false if the id does not exist.
+pub partial fn db_delete(val db: SqliteDb, id: Int) -> Result[Bool, String] ! DB {
+    match execute(db,
+        "DELETE FROM users WHERE id = ?",
+        [DbValue::Int(id)]) {
+        Err(_) => Err("delete failed"),
+        Ok(_)  => had_changes(db),
+    }
+}
+
+/// Count all users in the table.
+pub partial fn db_count(val db: SqliteDb) -> Result[Int, String] ! DB {
+    match query_scalar(db, "SELECT COUNT(*) FROM users", []) {
+        Err(_)                => Err("count failed"),
+        Ok(DbValue::Int(n))   => Ok(n),
+        Ok(DbValue::Float(f)) => Ok(f.to_int()),
+        Ok(_)                 => Err("unexpected count type"),
+    }
+}

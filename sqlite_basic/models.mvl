@@ -1,0 +1,14 @@
+// examples/sqlite_basic/models.mvl — User domain types.
+
+/// A persisted user record with a unique id.
+pub type User = struct {
+    id:   Int where self > 0,
+    name: String where len(self) > 0,
+    age:  Int where self >= 0,
+}
+
+/// Fields required to create a new user (id is assigned by the database).
+pub type CreateUserRequest = struct {
+    name: String where len(self) > 0,
+    age:  Int where self >= 0,
+}

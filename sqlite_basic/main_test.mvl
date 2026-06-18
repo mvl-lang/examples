@@ -1,0 +1,160 @@
+// examples/sqlite_basic/main_test.mvl — unit tests for DbValue and SqliteError enums.
+//
+// Tests the pure enum pattern matching used throughout main.mvl and db.mvl.
+// No DB effects — all values are constructed in-process.
+
+use pkg.sqlite.{SqliteError}
+use std.db.{DbValue}
+
+// ── DbValue: basic variants ───────────────────────────────────────────────────
+
+test fn test_dbvalue_int_round_trips() -> Unit {
+    let v: DbValue = DbValue::Int(42);
+    match v {
+        DbValue::Int(n) => assert_eq(n, 42),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_dbvalue_int_zero() -> Unit {
+    let v: DbValue = DbValue::Int(0);
+    match v {
+        DbValue::Int(n) => assert_eq(n, 0),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_dbvalue_int_negative() -> Unit {
+    let v: DbValue = DbValue::Int(-1);
+    match v {
+        DbValue::Int(n) => assert_eq(n, -1),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_dbvalue_text_round_trips() -> Unit {
+    let v: DbValue = DbValue::Text("Alice");
+    match v {
+        DbValue::Text(s) => assert_eq(s, "Alice"),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_dbvalue_text_empty() -> Unit {
+    let v: DbValue = DbValue::Text("");
+    match v {
+        DbValue::Text(s) => assert_eq(s.len(), 0),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_dbvalue_null() -> Unit {
+    let v: DbValue = DbValue::Null;
+    match v {
+        DbValue::Null => {},
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_dbvalue_bool_true() -> Unit {
+    let v: DbValue = DbValue::Bool(true);
+    match v {
+        DbValue::Bool(b) => assert_eq(b, true),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_dbvalue_bool_false() -> Unit {
+    let v: DbValue = DbValue::Bool(false);
+    match v {
+        DbValue::Bool(b) => assert_eq(b, false),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_dbvalue_float_round_trips() -> Unit {
+    let v: DbValue = DbValue::Float(3.14);
+    match v {
+        DbValue::Float(f) => assert_eq(f > 3.0, true),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_dbvalue_float_to_int_truncation() -> Unit {
+    let v: DbValue = DbValue::Float(7.9);
+    match v {
+        DbValue::Float(f) => assert_eq(f.to_int(), 7),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_dbvalue_blob_round_trips() -> Unit {
+    let v: DbValue = DbValue::Blob([65, 66, 67]);
+    match v {
+        DbValue::Blob(b) => assert_eq(b.len(), 3),
+        _ => assert_eq(1, 0),
+    }
+}
+
+// ── SqliteError variants ──────────────────────────────────────────────────────
+
+test fn test_sqlite_error_not_found() -> Unit {
+    let e: SqliteError = SqliteError::NotFound;
+    match e {
+        SqliteError::NotFound => {},
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_sqlite_error_busy() -> Unit {
+    let e: SqliteError = SqliteError::Busy;
+    match e {
+        SqliteError::Busy => {},
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_sqlite_error_constraint_carries_message() -> Unit {
+    let e: SqliteError = SqliteError::ConstraintViolation("UNIQUE constraint failed: users.email");
+    match e {
+        SqliteError::ConstraintViolation(msg) => assert_eq(msg.contains("UNIQUE"), true),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_sqlite_error_invalid_sql_carries_message() -> Unit {
+    let e: SqliteError = SqliteError::InvalidSql("near \"SELCT\": syntax error");
+    match e {
+        SqliteError::InvalidSql(msg) => assert_eq(msg.contains("syntax error"), true),
+        _ => assert_eq(1, 0),
+    }
+}
+
+test fn test_sqlite_error_other_carries_message() -> Unit {
+    let e: SqliteError = SqliteError::Other("disk full");
+    match e {
+        SqliteError::Other(msg) => assert_eq(msg, "disk full"),
+        _ => assert_eq(1, 0),
+    }
+}
+
+// ── Result[T, SqliteError] patterns used in db.mvl ───────────────────────────
+
+test fn test_result_ok_dbvalue() -> Unit {
+    let r: Result[DbValue, SqliteError] = Ok(DbValue::Int(1));
+    match r {
+        Ok(DbValue::Int(n))   => assert_eq(n, 1),
+        Ok(DbValue::Float(f)) => assert_eq(f.to_int(), 1),
+        Ok(_)                 => assert_eq(1, 0),
+        Err(_)                => assert_eq(1, 0),
+    }
+}
+
+test fn test_result_err_not_found() -> Unit {
+    let r: Result[DbValue, SqliteError] = Err(SqliteError::NotFound);
+    match r {
+        Ok(_)                 => assert_eq(1, 0),
+        Err(SqliteError::NotFound) => {},
+        Err(_)                => assert_eq(1, 0),
+    }
+}

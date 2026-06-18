@@ -1,0 +1,8 @@
+# Local package cache
+.mvl/
+
+# Build artifacts
+target/
+
+# Runtime database files
+*.db
