@@ -1,0 +1,143 @@
+// examples/sqlite_basic — pkg.sqlite CRUD demonstration
+//
+// Creates an in-memory SQLite database and exercises every CRUD operation:
+// insert, list all, get by id, filter by age, update, delete, and count.
+//
+// Run:  mvl run main.mvl
+// Test: make test  (unit tests in *_test.mvl files)
+
+use db::{db_open, db_init, db_insert, db_list, db_get, db_list_older_than, db_update_age, db_delete, db_count}
+use models::{CreateUserRequest}
+use pkg.sqlite.{SqliteDb}
+use std.io.{println}
+
+partial fn main() -> Unit ! DB + FileRead + FileWrite + Console {
+    // ── Open ─────────────────────────────────────────────────────────────────
+
+    let db: SqliteDb = match db_open(":memory:") {
+        Err(msg) => { println("open failed: ".concat(msg)); return }
+        Ok(db)   => db,
+    };
+
+    match db_init(db) {
+        Err(msg) => { println("init failed: ".concat(msg)); return }
+        Ok(_)    => (),
+    }
+
+    // ── Insert ───────────────────────────────────────────────────────────────
+
+    println("Inserting users...");
+    let seed: List[CreateUserRequest] = [
+        CreateUserRequest { name: "Alice", age: 30 },
+        CreateUserRequest { name: "Bob",   age: 25 },
+        CreateUserRequest { name: "Carol", age: 35 },
+    ];
+    let si: ref Int = 0;
+    while si < seed.len() {
+        match seed.get(si) {
+            None      => {},
+            Some(req) => match db_insert(db, req) {
+                Err(msg) => println("  insert failed: ".concat(msg)),
+                Ok(id)   => println("  inserted id=".concat(id.to_string()).concat(" name=").concat(req.name)),
+            },
+        }
+        si = si + 1
+    }
+
+    // ── List all ─────────────────────────────────────────────────────────────
+
+    println("\nAll users:");
+    match db_list(db) {
+        Err(msg)  => println("  list failed: ".concat(msg)),
+        Ok(users) => {
+            let li: ref Int = 0;
+            while li < users.len() {
+                match users.get(li) {
+                    None    => {},
+                    Some(u) => println(
+                        "  id=".concat(u.id.to_string())
+                            .concat(" name=").concat(u.name)
+                            .concat(" age=").concat(u.age.to_string())),
+                }
+                li = li + 1
+            }
+        },
+    }
+
+    // ── Get by id ────────────────────────────────────────────────────────────
+
+    println("\nGet user id=1:");
+    match db_get(db, 1) {
+        Err(msg)    => println("  get failed: ".concat(msg)),
+        Ok(None)    => println("  not found"),
+        Ok(Some(u)) => println("  ".concat(u.name).concat(", age ").concat(u.age.to_string())),
+    }
+
+    // ── Filter by age ────────────────────────────────────────────────────────
+
+    println("\nUsers aged 26 or older:");
+    match db_list_older_than(db, 26) {
+        Err(msg)  => println("  filter failed: ".concat(msg)),
+        Ok(users) => {
+            let fi: ref Int = 0;
+            while fi < users.len() {
+                match users.get(fi) {
+                    None    => {},
+                    Some(u) => println("  ".concat(u.name).concat(" (").concat(u.age.to_string()).concat(")")),
+                }
+                fi = fi + 1
+            }
+        },
+    }
+
+    // ── Update ───────────────────────────────────────────────────────────────
+
+    println("\nUpdate Alice's age to 31:");
+    match db_update_age(db, 1, 31) {
+        Err(msg)  => println("  update failed: ".concat(msg)),
+        Ok(false) => println("  not found"),
+        Ok(true)  => println("  updated"),
+    }
+
+    // ── Verify update ────────────────────────────────────────────────────────
+
+    match db_get(db, 1) {
+        Err(_)      => {},
+        Ok(None)    => {},
+        Ok(Some(u)) => println("  Alice now age=".concat(u.age.to_string())),
+    }
+
+    // ── Delete ───────────────────────────────────────────────────────────────
+
+    println("\nDelete Bob (id=2):");
+    match db_delete(db, 2) {
+        Err(msg)  => println("  delete failed: ".concat(msg)),
+        Ok(false) => println("  not found"),
+        Ok(true)  => println("  deleted"),
+    }
+
+    // ── Count ────────────────────────────────────────────────────────────────
+
+    println("\nFinal state:");
+    match db_count(db) {
+        Err(msg) => println("  count failed: ".concat(msg)),
+        Ok(n)    => println("  ".concat(n.to_string()).concat(" user(s) remaining")),
+    }
+
+    match db_list(db) {
+        Err(_)    => {},
+        Ok(users) => {
+            let ri: ref Int = 0;
+            while ri < users.len() {
+                match users.get(ri) {
+                    None    => {},
+                    Some(u) => println(
+                        "  id=".concat(u.id.to_string())
+                            .concat(" name=").concat(u.name)
+                            .concat(" age=").concat(u.age.to_string())),
+                }
+                ri = ri + 1
+            }
+        },
+    }
+}
