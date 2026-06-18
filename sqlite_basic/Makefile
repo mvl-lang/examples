@@ -5,7 +5,7 @@
 #   make test         # Run unit tests
 #   make assurance    # Full assurance report
 
-.PHONY: help install check prove test assurance assurance-verbose run smoke clean
+.PHONY: help install check prove test assurance assurance-verbose coverage fmt lint run smoke clean
 
 .DEFAULT_GOAL := help
 
@@ -37,6 +37,15 @@ assurance: install ## Generate assurance report
 
 assurance-verbose: install ## Generate verbose assurance report
 	$(MVL) assurance --verbose $(DIR)
+
+coverage: install ## Generate branch coverage report
+	$(MVL) test --coverage $(DIR)
+
+fmt: guard-mvl ## Format all source files
+	$(MVL) fmt $(DIR)
+
+lint: guard-mvl ## Lint all source files
+	$(MVL) lint $(DIR)
 
 run: install ## Run the example (in-memory database)
 	$(MVL) run $(DIR)main.mvl
