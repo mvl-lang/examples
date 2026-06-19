@@ -3,21 +3,18 @@
 // Tests the row decoder without requiring DB effects.
 // row_to_user is package-private; mirrored here to remain in the same
 // compilation unit as the production implementation.
-
 use std.db.{DbValue}
 
 // ── Type re-declarations ──────────────────────────────────────────────────────
 // Tests live in the same directory as source — types from models.mvl and
 // db.mvl are auto-loaded by the test runner.
-
 type User = struct {
-    id:   Int where self > 0,
+    id: Int where self > 0,
     name: String where len(self) > 0,
-    age:  Int where self >= 0,
+    age: Int where self >= 0,
 }
 
 // ── row_to_user (mirrors db.mvl) ──────────────────────────────────────────────
-
 total fn row_to_user(row: Map[String, DbValue]) -> Option[User] {
     match row.get("id") {
         Some(DbValue::Int(id)) => {
@@ -50,13 +47,8 @@ total fn row_to_user(row: Map[String, DbValue]) -> Option[User] {
 }
 
 // ── Tests: valid rows ─────────────────────────────────────────────────────────
-
 test fn test_row_to_user_valid() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(1),
-        "name": DbValue::Text("Alice"),
-        "age":  DbValue::Int(30),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(1), "name": DbValue::Text("Alice"), "age": DbValue::Int(30)};
     match row_to_user(row) {
         Some(u) => {
             assert_eq(u.id, 1);
@@ -68,160 +60,108 @@ test fn test_row_to_user_valid() -> Unit {
 }
 
 test fn test_row_to_user_large_id() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(999999),
-        "name": DbValue::Text("Bob"),
-        "age":  DbValue::Int(25),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(999999), "name": DbValue::Text("Bob"), "age": DbValue::Int(25)};
     match row_to_user(row) {
         Some(u) => assert_eq(u.id, 999999),
-        None    => assert_eq(1, 0),
+        None => assert_eq(1, 0),
     }
 }
 
 test fn test_row_to_user_age_zero() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(1),
-        "name": DbValue::Text("Newborn"),
-        "age":  DbValue::Int(0),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(1), "name": DbValue::Text("Newborn"), "age": DbValue::Int(0)};
     match row_to_user(row) {
         Some(u) => assert_eq(u.age, 0),
-        None    => assert_eq(1, 0),
+        None => assert_eq(1, 0),
     }
 }
 
 // ── Tests: missing fields ─────────────────────────────────────────────────────
-
 test fn test_row_to_user_missing_id() -> Unit {
-    let row: Map[String, DbValue] = {
-        "name": DbValue::Text("Alice"),
-        "age":  DbValue::Int(30),
-    };
+    let row: Map[String, DbValue] = {"name": DbValue::Text("Alice"), "age": DbValue::Int(30)};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }
 
 test fn test_row_to_user_missing_name() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":  DbValue::Int(1),
-        "age": DbValue::Int(30),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(1), "age": DbValue::Int(30)};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }
 
 test fn test_row_to_user_missing_age() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(1),
-        "name": DbValue::Text("Alice"),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(1), "name": DbValue::Text("Alice")};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }
 
 // ── Tests: wrong column types ─────────────────────────────────────────────────
-
 test fn test_row_to_user_id_as_text() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Text("1"),
-        "name": DbValue::Text("Alice"),
-        "age":  DbValue::Int(30),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Text("1"), "name": DbValue::Text("Alice"), "age": DbValue::Int(30)};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }
 
 test fn test_row_to_user_name_as_int() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(1),
-        "name": DbValue::Int(42),
-        "age":  DbValue::Int(30),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(1), "name": DbValue::Int(42), "age": DbValue::Int(30)};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }
 
 test fn test_row_to_user_age_as_text() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(1),
-        "name": DbValue::Text("Alice"),
-        "age":  DbValue::Text("thirty"),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(1), "name": DbValue::Text("Alice"), "age": DbValue::Text("thirty")};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }
 
 test fn test_row_to_user_age_as_null() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(1),
-        "name": DbValue::Text("Alice"),
-        "age":  DbValue::Null,
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(1), "name": DbValue::Text("Alice"), "age": DbValue::Null};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }
 
 // ── Tests: refinement violations ─────────────────────────────────────────────
-
 test fn test_row_to_user_zero_id() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(0),
-        "name": DbValue::Text("Alice"),
-        "age":  DbValue::Int(30),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(0), "name": DbValue::Text("Alice"), "age": DbValue::Int(30)};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }
 
 test fn test_row_to_user_negative_id() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(-1),
-        "name": DbValue::Text("Alice"),
-        "age":  DbValue::Int(30),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(-1), "name": DbValue::Text("Alice"), "age": DbValue::Int(30)};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }
 
 test fn test_row_to_user_empty_name() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(1),
-        "name": DbValue::Text(""),
-        "age":  DbValue::Int(30),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(1), "name": DbValue::Text(""), "age": DbValue::Int(30)};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }
 
 test fn test_row_to_user_negative_age() -> Unit {
-    let row: Map[String, DbValue] = {
-        "id":   DbValue::Int(1),
-        "name": DbValue::Text("Alice"),
-        "age":  DbValue::Int(-1),
-    };
+    let row: Map[String, DbValue] = {"id": DbValue::Int(1), "name": DbValue::Text("Alice"), "age": DbValue::Int(-1)};
     match row_to_user(row) {
         Some(_) => assert_eq(1, 0),
-        None    => {},
+        None => { },
     }
 }

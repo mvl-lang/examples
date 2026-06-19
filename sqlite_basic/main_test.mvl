@@ -2,12 +2,11 @@
 //
 // Tests the pure enum pattern matching used throughout main.mvl and db.mvl.
 // No DB effects — all values are constructed in-process.
-
 use pkg.sqlite.{SqliteError}
+
 use std.db.{DbValue}
 
 // ── DbValue: basic variants ───────────────────────────────────────────────────
-
 test fn test_dbvalue_int_round_trips() -> Unit {
     let v: DbValue = DbValue::Int(42);
     match v {
@@ -51,7 +50,7 @@ test fn test_dbvalue_text_empty() -> Unit {
 test fn test_dbvalue_null() -> Unit {
     let v: DbValue = DbValue::Null;
     match v {
-        DbValue::Null => {},
+        DbValue::Null => { },
         _ => assert_eq(1, 0),
     }
 }
@@ -97,11 +96,10 @@ test fn test_dbvalue_blob_round_trips() -> Unit {
 }
 
 // ── SqliteError variants ──────────────────────────────────────────────────────
-
 test fn test_sqlite_error_not_found() -> Unit {
     let e: SqliteError = SqliteError::NotFound;
     match e {
-        SqliteError::NotFound => {},
+        SqliteError::NotFound => { },
         _ => assert_eq(1, 0),
     }
 }
@@ -109,7 +107,7 @@ test fn test_sqlite_error_not_found() -> Unit {
 test fn test_sqlite_error_busy() -> Unit {
     let e: SqliteError = SqliteError::Busy;
     match e {
-        SqliteError::Busy => {},
+        SqliteError::Busy => { },
         _ => assert_eq(1, 0),
     }
 }
@@ -139,22 +137,21 @@ test fn test_sqlite_error_other_carries_message() -> Unit {
 }
 
 // ── Result[T, SqliteError] patterns used in db.mvl ───────────────────────────
-
 test fn test_result_ok_dbvalue() -> Unit {
     let r: Result[DbValue, SqliteError] = Ok(DbValue::Int(1));
     match r {
-        Ok(DbValue::Int(n))   => assert_eq(n, 1),
+        Ok(DbValue::Int(n)) => assert_eq(n, 1),
         Ok(DbValue::Float(f)) => assert_eq(f.to_int(), 1),
-        Ok(_)                 => assert_eq(1, 0),
-        Err(_)                => assert_eq(1, 0),
+        Ok(_) => assert_eq(1, 0),
+        Err(_) => assert_eq(1, 0),
     }
 }
 
 test fn test_result_err_not_found() -> Unit {
     let r: Result[DbValue, SqliteError] = Err(SqliteError::NotFound);
     match r {
-        Ok(_)                 => assert_eq(1, 0),
-        Err(SqliteError::NotFound) => {},
-        Err(_)                => assert_eq(1, 0),
+        Ok(_) => assert_eq(1, 0),
+        Err(SqliteError::NotFound) => { },
+        Err(_) => assert_eq(1, 0),
     }
 }
