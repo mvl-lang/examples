@@ -1,11 +1,19 @@
 // examples/crud_api — full CRUD REST API over SQLite using pkg.http REST helpers.
 //
 // Routes:
+//   GET    /health        → full health report (K8s probe)
+//   GET    /health/live   → liveness probe (always 200)
+//   GET    /health/ready  → readiness probe (200 if DB ok, 503 otherwise)
 //   GET    /users         → list all users (JSON array)
 //   POST   /users         → create user (JSON body: {name, email})
 //   GET    /users/{id}    → get user by id
 //   PUT    /users/{id}    → update user (JSON body: {name, email})
 //   DELETE /users/{id}    → delete user
+//
+// Observability:
+//   Metrics: Prometheus endpoint on :9090/metrics (http_requests_total, http_responses_total)
+//   Tracing: Spans emitted to stderr (pkg-trace)
+//   Logging: Structured logs to stderr (std.log)
 //
 // Config is loaded in layers: defaults → config.toml → CRUD_API_* env vars → CLI args.
 // See: config.mvl and .openspec/patterns/001-config.md
@@ -23,39 +31,56 @@
 //        -d '{"name":"Alice","email":"alice@example.com"}' | jq .
 //
 // See #1000.
-
 use models::{User, CreateUserRequest, UpdateUserRequest}
+
 use config::{CrudApiConfig, ConfigLoadError, load_config}
+
 use db::{db_open, db_init}
+
 use seed::{db_seed_from_csv}
+
 use handlers::{list_users_handler, get_user_handler, create_user_handler,
                update_user_handler, delete_user_handler}
-use pkg.http.{Method, Request, Response, HttpError, Router, MatchedRoute,
+
+use pkg.http.{Method, Request, Response, HttpError, Router, MatchedRoute, Status,
               parse_request, serialize_response, error_response,
               new_router, route, dispatch, status_code,
               json_error, http_internal_error, method_name}
+
 use pkg.sqlite.{SqliteDb, close}
+
 use std.net.{TcpListener, TcpStream, NetError,
              tcp_listen, tcp_accept, tcp_read_request, tcp_write,
              tcp_close_listener, tcp_close_stream, net_error_msg}
+
 use std.audit.{AuditLogger, AuditEvent, file_audit_logger, modify}
+
 use std.io.{path, IoError}
+
 use std.log.{Logger, default_logger, log_level_name, log_format_name}
+
 use std.runtime.{manifest, Manifest, PackageInfo}
+
 use pkg.trace.{Trace, Tracer, default_tracer, trace_start, span_end, span_error, TraceContext}
+use pkg.health.{HealthStatus, HealthReport, ComponentHealth, make_report, health_to_response}
+use pkg.metrics.{effect Metric, counter_inc, histogram_observe, start_prometheus_exporter}
+
+// ── Observability effect ──────────────────────────────────────────────────────
+//
+// Bundles logging, audit, tracing, and metrics into a single effect alias
+// for cleaner function signatures across handlers.
+effect Observability > Log + Audit + Trace + Metric
 
 // ── Composite effect ──────────────────────────────────────────────────────────
 //
-// Bundles the six effects used by `main` into a single named alias so the
+// Bundles all effects used by `main` into a single named alias so the
 // function signature stays below the complexity-effect-width limit (max 3).
-
-effect AppIO > DB + Env + FileRead + FileWrite + Log + Net + Audit + Trace
+effect AppIO > DB + Env + FileRead + FileWrite + Net + Observability
 
 // ── Pre-listen admission ────────────────────────────────────────────────────
 //
 // Req 10 (Refinements) — `where` predicates carry a static guarantee that
 // the literal default port falls inside the IANA-valid TCP range.
-
 total fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int { p }
 
 fn format_packages(pkgs: List[PackageInfo]) -> String {
@@ -64,15 +89,18 @@ fn format_packages(pkgs: List[PackageInfo]) -> String {
     for p in pkgs {
         if first {
             first = false;
-            result = result.concat(p.name).concat("@").concat(p.version)
+            result = result.concat(p.name).concat("@").concat(p.version);
         } else {
-            result = result.concat(",").concat(p.name).concat("@").concat(p.version)
+            result = result.concat(",").concat(p.name).concat("@").concat(p.version);
         }
     }
     result
 }
 
-fn log_packages(val logger: Logger, pkgs: List[PackageInfo]) -> Unit ! Log {
+fn log_packages(
+    val logger: Logger,
+    pkgs: List[PackageInfo],
+) -> Unit ! Log {
     for p in pkgs {
         logger.info("package", {"purl": p.purl})
     }
@@ -81,28 +109,119 @@ fn log_packages(val logger: Logger, pkgs: List[PackageInfo]) -> Unit ! Log {
 // ── Router ────────────────────────────────────────────────────────────────────
 //
 // Pure transformation — marked `total` for termination proof.
-
 total fn setup_router() -> Router {
     let r: Router = new_router();
-    let r: Router = route(r, Method::Get,    "/users",      "list_users");
-    let r: Router = route(r, Method::Post,   "/users",      "create_user");
-    let r: Router = route(r, Method::Get,    "/users/{id}", "get_user");
-    let r: Router = route(r, Method::Put,    "/users/{id}", "update_user");
+    // Health endpoints (K8s probes)
+    let r: Router = route(r, Method::Get, "/health", "health");
+    let r: Router = route(r, Method::Get, "/health/live", "health_live");
+    let r: Router = route(r, Method::Get, "/health/ready", "health_ready");
+    // CRUD endpoints
+    let r: Router = route(r, Method::Get, "/users", "list_users");
+    let r: Router = route(r, Method::Post, "/users", "create_user");
+    let r: Router = route(r, Method::Get, "/users/{id}", "get_user");
+    let r: Router = route(r, Method::Put, "/users/{id}", "update_user");
     route(r, Method::Delete, "/users/{id}", "delete_user")
 }
 
-// ── Per-request dispatch ──────────────────────────────────────────────────────
+// ── Health check handlers ─────────────────────────────────────────────────────
+//
+// Three-endpoint pattern for K8s:
+//   /health       → full report with DB component status
+//   /health/live  → always 200 if process is alive
+//   /health/ready → 200 if DB is reachable, 503 otherwise
 
-partial fn handle_request(val db: SqliteDb, val logger: Logger, val auditor: AuditLogger, val tracer: Tracer, val ctx: TraceContext, req: Request, matched: MatchedRoute) -> Response ! DB + Log + Audit + Trace {
+/// Check if database is responsive (simple ping query).
+partial fn check_db_health(val db: SqliteDb) -> Bool ! DB {
+    match db.execute("SELECT 1") {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+/// Full health report with DB component check.
+partial fn health_handler(
+    val db: SqliteDb,
+    val logger: Logger,
+    version: String,
+) -> Response ! DB + Log + Clock {
+    let db_ok: Bool = check_db_health(db);
+    let db_status: HealthStatus = if db_ok {
+        HealthStatus::Healthy
+    } else {
+        HealthStatus::Unhealthy { reason: "database unreachable" }
+    };
+    let db_component: ComponentHealth = ComponentHealth {
+        name: "database",
+        status: db_status,
+        latency_ms: None,
+    };
+    let overall: HealthStatus = if db_ok {
+        HealthStatus::Healthy
+    } else {
+        HealthStatus::Unhealthy { reason: "database unreachable" }
+    };
+    let report: HealthReport = make_report(overall, [db_component], version);
+    logger.debug("health_check", {"status": if db_ok { "healthy" } else { "unhealthy" }});
+    health_to_response(report)
+}
+
+/// Liveness probe — always returns 200 if process is running.
+total fn health_live_handler() -> Response {
+    Response {
+        status: Status::Http200Ok,
+        headers: {"Content-Type": "application/json"},
+        body: "{\"status\":\"alive\"}",
+    }
+}
+
+/// Readiness probe — returns 200 if DB is reachable, 503 otherwise.
+partial fn health_ready_handler(val db: SqliteDb) -> Response ! DB {
+    let db_ok: Bool = check_db_health(db);
+    if db_ok {
+        Response {
+            status: Status::Http200Ok,
+            headers: {"Content-Type": "application/json"},
+            body: "{\"status\":\"ready\"}",
+        }
+    } else {
+        Response {
+            status: Status::Http503ServiceUnavailable,
+            headers: {"Content-Type": "application/json"},
+            body: "{\"status\":\"not ready\",\"reason\":\"database unreachable\"}",
+        }
+    }
+}
+
+// ── Per-request dispatch ──────────────────────────────────────────────────────
+partial fn handle_request(
+    val db: SqliteDb,
+    val logger: Logger,
+    val auditor: AuditLogger,
+    val tracer: Tracer,
+    val ctx: TraceContext,
+    version: String,
+    req: Request,
+    matched: MatchedRoute,
+) -> Response ! DB + Observability {
+    // Emit request counter metric
+    counter_inc("http_requests_total", {"method": method_name(req.method), "route": matched.name});
     logger.debug("dispatch", {"route": matched.name, "method": method_name(req.method), "path": req.path, "trace_id": ctx.trace_id});
-    match matched.name {
-        "list_users"  => list_users_handler(db, logger, auditor, tracer, ctx, req, matched),
-        "get_user"    => get_user_handler(db, logger, auditor, tracer, ctx, req, matched),
+    let resp: Response = match matched.name {
+        // Health endpoints
+        "health" => health_handler(db, logger, version),
+        "health_live" => health_live_handler(),
+        "health_ready" => health_ready_handler(db),
+        // CRUD endpoints
+        "list_users" => list_users_handler(db, logger, auditor, tracer, ctx, req, matched),
+        "get_user" => get_user_handler(db, logger, auditor, tracer, ctx, req, matched),
         "create_user" => create_user_handler(db, logger, auditor, tracer, ctx, req, matched),
         "update_user" => update_user_handler(db, logger, auditor, tracer, ctx, req, matched),
         "delete_user" => delete_user_handler(db, logger, auditor, tracer, ctx, req, matched),
-        _             => json_error(http_internal_error("unknown route")),
-    }
+        _ => json_error(http_internal_error("unknown route")),
+    };
+    // Emit response counter metric
+    counter_inc("http_responses_total", {"status": status_code(resp.status).to_string(), "route": matched.name});
+    resp
 }
 
 // ── Synchronous accept loop ───────────────────────────────────────────────────
@@ -113,11 +232,18 @@ partial fn handle_request(val db: SqliteDb, val logger: Logger, val auditor: Aud
 // TcpListener is Copy so the while loop can pass it to tcp_accept each
 // iteration without consuming it.  Fatal accept errors close the listener
 // and return early; transient errors (reset, timeout) just continue.
-
-partial fn process_stream(val db: SqliteDb, val logger: Logger, val auditor: AuditLogger, val tracer: Tracer, val router: Router, stream: TcpStream) -> Unit ! DB + Log + Net + Audit + Trace {
+partial fn process_stream(
+    val db: SqliteDb,
+    val logger: Logger,
+    val auditor: AuditLogger,
+    val tracer: Tracer,
+    val router: Router,
+    version: String,
+    stream: TcpStream,
+) -> Unit ! DB + Net + Observability {
     let req_ctx: TraceContext = trace_start("http.request");
     let resp: Response = match tcp_read_request(stream) {
-        Err(e)  => {
+        Err(e) => {
             logger.warn("read error", {"error": net_error_msg(e), "trace_id": req_ctx.trace_id});
             json_error(http_internal_error("read error"))
         },
@@ -131,12 +257,12 @@ partial fn process_stream(val db: SqliteDb, val logger: Logger, val auditor: Aud
                     logger.warn("not_found", {"status": status_code(e.status).to_string(), "error": e.detail, "method": method_name(req.method), "path": req.path, "trace_id": req_ctx.trace_id});
                     error_response(e)
                 },
-                Ok(matched) => handle_request(db, logger, auditor, tracer, req_ctx, req, matched),
+                Ok(matched) => handle_request(db, logger, auditor, tracer, req_ctx, version, req, matched),
             },
         },
     };
     match tcp_write(stream, serialize_response(resp)) {
-        Ok(_)  => {
+        Ok(_) => {
             span_end(tracer, req_ctx);
             tcp_close_stream(stream)
         },
@@ -149,7 +275,15 @@ partial fn process_stream(val db: SqliteDb, val logger: Logger, val auditor: Aud
     }
 }
 
-partial fn serve(val db: SqliteDb, listener: TcpListener, val logger: Logger, val auditor: AuditLogger, val tracer: Tracer, val router: Router) -> Unit ! DB + Log + Net + Audit + Trace {
+partial fn serve(
+    val db: SqliteDb,
+    listener: TcpListener,
+    val logger: Logger,
+    val auditor: AuditLogger,
+    val tracer: Tracer,
+    val router: Router,
+    version: String,
+) -> Unit ! DB + Net + Observability {
     while true {
         match tcp_accept(listener) {
             Err(NetError::ConnectionReset) => {
@@ -161,81 +295,73 @@ partial fn serve(val db: SqliteDb, listener: TcpListener, val logger: Logger, va
             Err(e) => {
                 logger.error("accept failed — shutting down", {"error": net_error_msg(e)});
                 tcp_close_listener(listener);
-                return
+                return;
             },
-            Ok(stream) => process_stream(db, logger, auditor, tracer, router, stream),
+            Ok(stream) => process_stream(db, logger, auditor, tracer, router, version, stream),
         }
     }
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
-
 partial fn main() -> Unit ! AppIO {
-    // Req 10: prove the literal default port lies in the valid TCP range.
-    // Discharged statically (Layer 1, interval) — no runtime branch emitted.
     let _default_port_ok: Int = validate_port_range(8080);
-
     let cfg: CrudApiConfig = match load_config() {
         Err(_) => {
             default_logger().error("config load failed", {"reason": "see stderr"});
-            return
+            return;
         },
-        Ok(c)  => c,
+        Ok(c) => c,
     };
-
     let logger: Logger = Logger { format: cfg.log_format, min_level: cfg.log_level, fd: stderr() };
     let boot_ctx: TraceContext = trace_start("service.boot");
     let m: Manifest = manifest();
-    logger.info("application", {
-        "app":        m.app_name,
-        "version":    m.app_version,
-        "built":      m.build.date,
-        "service_id": boot_ctx.trace_id,
-    });
-    logger.info("versions", {
-        "mvl":     m.mvl_version,
-        "runtime": m.runtime_version,
-        "stdlib":  m.stdlib_version,
-    });
+    logger.info("application", {"app": m.app_name, "version": m.app_version, "built": m.build.date, "service_id": boot_ctx.trace_id});
+    logger.info("versions", {"mvl": m.mvl_version, "runtime": m.runtime_version, "stdlib": m.stdlib_version});
     log_packages(logger, m.packages);
     logger.info("source", {"digest": m.source_digest});
-
     let db: SqliteDb = match db_open(cfg.db_path) {
-        Err(msg) => { logger.error("db open failed", {"error": msg}); return },
-        Ok(db)   => db,
+        Err(msg) => {
+            logger.error("db open failed", {"error": msg});
+            return;
+        },
+        Ok(db) => db,
     };
-
     match db_init(db) {
-        Err(msg) => { logger.error("db init failed", {"error": msg}); return },
-        Ok(_)    => {},
+        Err(msg) => {
+            logger.error("db init failed", {"error": msg});
+            return;
+        },
+        Ok(_) => { },
     }
-
     let router: Router = setup_router();
     let auditor: AuditLogger = file_audit_logger(path(cfg.audit_path));
     let tracer: Tracer = default_tracer();
-    let _: Result[Unit, IoError] = auditor.emit(
-        modify("system", "service", "start")
-            .with_details({"instance_id": boot_ctx.trace_id, "app": m.app_name, "version": m.app_version, "packages": format_packages(m.packages)})
-    );
-
-    logger.info("server",   {"host": cfg.host, "port": cfg.port.to_string()});
-    logger.info("logging",  {"log_level": log_level_name(cfg.log_level), "log_format": log_format_name(cfg.log_format)});
+    let _: Result[Unit, IoError] = auditor.emit(modify("system", "service", "start").with_details({"instance_id": boot_ctx.trace_id, "app": m.app_name, "version": m.app_version, "packages": format_packages(m.packages)}));
+    logger.info("server", {"host": cfg.host, "port": cfg.port.to_string()});
+    logger.info("logging", {"log_level": log_level_name(cfg.log_level), "log_format": log_format_name(cfg.log_format)});
     logger.info("database", {"db_path": cfg.db_path});
-    logger.info("audit",    {"audit_path": cfg.audit_path});
+    logger.info("audit", {"audit_path": cfg.audit_path});
+
+    // Start Prometheus metrics exporter on port 9090
+    let metrics_addr: String = cfg.host.concat(":9090");
+    match start_prometheus_exporter(metrics_addr) {
+        Err(e) => logger.warn("metrics exporter failed", {"error": e}),
+        Ok(_) => logger.info("metrics", {"endpoint": "http://".concat(metrics_addr).concat("/metrics")}),
+    }
 
     if cfg.seed_file != "" {
         logger.info("seeding from CSV", {"path": cfg.seed_file});
         match db_seed_from_csv(db, logger, cfg.seed_file) {
             Err(msg) => logger.warn("seed failed", {"error": msg}),
-            Ok(n)    => logger.info("seed complete", {"rows": n.to_string()}),
+            Ok(n) => logger.info("seed complete", {"rows": n.to_string()}),
         }
-    } else {}
-
+    } else { }
     logger.info("listening", {"status": "ready", "service_id": boot_ctx.trace_id});
     span_end(tracer, boot_ctx);
-
     match tcp_listen(cfg.host, cfg.port) {
         Err(e) => logger.error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => serve(db, listener, logger, auditor, tracer, router),
+        Ok(listener) => serve(db, listener, logger, auditor, tracer, router, m.app_version),
     }
 }
+// Req 10: prove the literal default port lies in the valid TCP range.
+// Discharged statically (Layer 1, interval) — no runtime branch emitted.

@@ -1,25 +1,22 @@
 // examples/crud_api/handlers_test.mvl — unit tests for input validation.
 //
 // Tests validation logic that enforces refinements at the HTTP boundary.
-
 // ── Local type re-declarations (test isolation) ───────────────────────────────
-
 type CreateUserRequest = struct {
-    name:  String where len(self) > 0,
+    name: String where len(self) > 0,
     email: String where len(self) > 0,
 }
 
 type UpdateUserRequest = struct {
-    name:  String where len(self) > 0,
+    name: String where len(self) > 0,
     email: String where len(self) > 0,
 }
 
 // ── Validation helpers (mirrors what handlers should do) ──────────────────────
-
 /// Validate name: non-empty string.
 total fn validate_name(name: String) -> Result[String, String] {
     match name.len() > 0 {
-        true  => Ok(name),
+        true => Ok(name),
         false => Err("name must not be empty"),
     }
 }
@@ -27,8 +24,8 @@ total fn validate_name(name: String) -> Result[String, String] {
 /// Validate email: non-empty and contains @.
 total fn validate_email(email: String) -> Result[String, String] {
     match email.len() > 0 {
-        true  => match email.contains("@") {
-            true  => Ok(email),
+        true => match email.contains("@") {
+            true => Ok(email),
             false => Err("email must contain @"),
         },
         false => Err("email must not be empty"),
@@ -36,7 +33,10 @@ total fn validate_email(email: String) -> Result[String, String] {
 }
 
 /// Validate and construct CreateUserRequest.
-total fn validate_create_request(name: String, email: String) -> Result[CreateUserRequest, String] {
+total fn validate_create_request(
+    name: String,
+    email: String,
+) -> Result[CreateUserRequest, String] {
     match validate_name(name) {
         Err(e) => Err(e),
         Ok(valid_name) => match validate_email(email) {
@@ -47,75 +47,72 @@ total fn validate_create_request(name: String, email: String) -> Result[CreateUs
 }
 
 // ── Tests: validate_name ──────────────────────────────────────────────────────
-
 test fn test_validate_name_valid() -> Unit {
     match validate_name("Alice") {
-        Ok(n)  => assert_eq(n, "Alice"),
+        Ok(n) => assert_eq(n, "Alice"),
         Err(_) => assert_eq(1, 0),
     }
 }
 
 test fn test_validate_name_empty() -> Unit {
     match validate_name("") {
-        Ok(_)  => assert_eq(1, 0),
+        Ok(_) => assert_eq(1, 0),
         Err(e) => assert_eq(e, "name must not be empty"),
     }
 }
 
 test fn test_validate_name_whitespace_only() -> Unit {
-    // Whitespace is technically non-empty, passes len > 0
     match validate_name("   ") {
-        Ok(n)  => assert_eq(n, "   "),
+        Ok(n) => assert_eq(n, "   "),
         Err(_) => assert_eq(1, 0),
     }
 }
 
+// Whitespace is technically non-empty, passes len > 0
 test fn test_validate_name_special_chars() -> Unit {
     match validate_name("O'Brien-Smith") {
-        Ok(n)  => assert_eq(n, "O'Brien-Smith"),
+        Ok(n) => assert_eq(n, "O'Brien-Smith"),
         Err(_) => assert_eq(1, 0),
     }
 }
 
 // ── Tests: validate_email ─────────────────────────────────────────────────────
-
 test fn test_validate_email_valid() -> Unit {
     match validate_email("alice@example.com") {
-        Ok(e)  => assert_eq(e, "alice@example.com"),
+        Ok(e) => assert_eq(e, "alice@example.com"),
         Err(_) => assert_eq(1, 0),
     }
 }
 
 test fn test_validate_email_empty() -> Unit {
     match validate_email("") {
-        Ok(_)  => assert_eq(1, 0),
+        Ok(_) => assert_eq(1, 0),
         Err(e) => assert_eq(e, "email must not be empty"),
     }
 }
 
 test fn test_validate_email_no_at() -> Unit {
     match validate_email("alice.example.com") {
-        Ok(_)  => assert_eq(1, 0),
+        Ok(_) => assert_eq(1, 0),
         Err(e) => assert_eq(e, "email must contain @"),
     }
 }
 
 test fn test_validate_email_just_at() -> Unit {
     match validate_email("@") {
-        Ok(e)  => assert_eq(e, "@"),  // len > 0 and contains @
+        Ok(e) => assert_eq(e, "@"),
         Err(_) => assert_eq(1, 0),
     }
 }
 
 test fn test_validate_email_with_plus() -> Unit {
     match validate_email("alice+tag@example.com") {
-        Ok(e)  => assert_eq(e, "alice+tag@example.com"),
+        Ok(e) => assert_eq(e, "alice+tag@example.com"),
         Err(_) => assert_eq(1, 0),
     }
 }
 
 // ── Tests: validate_create_request ────────────────────────────────────────────
-
 test fn test_validate_create_request_valid() -> Unit {
     match validate_create_request("Alice", "alice@example.com") {
         Ok(req) => {
@@ -128,28 +125,28 @@ test fn test_validate_create_request_valid() -> Unit {
 
 test fn test_validate_create_request_empty_name() -> Unit {
     match validate_create_request("", "alice@example.com") {
-        Ok(_)  => assert_eq(1, 0),
+        Ok(_) => assert_eq(1, 0),
         Err(e) => assert_eq(e, "name must not be empty"),
     }
 }
 
 test fn test_validate_create_request_empty_email() -> Unit {
     match validate_create_request("Alice", "") {
-        Ok(_)  => assert_eq(1, 0),
+        Ok(_) => assert_eq(1, 0),
         Err(e) => assert_eq(e, "email must not be empty"),
     }
 }
 
 test fn test_validate_create_request_invalid_email() -> Unit {
     match validate_create_request("Alice", "not-an-email") {
-        Ok(_)  => assert_eq(1, 0),
+        Ok(_) => assert_eq(1, 0),
         Err(e) => assert_eq(e, "email must contain @"),
     }
 }
 
 test fn test_validate_create_request_both_empty() -> Unit {
     match validate_create_request("", "") {
-        Ok(_)  => assert_eq(1, 0),
-        Err(e) => assert_eq(e, "name must not be empty"),  // name validated first
+        Ok(_) => assert_eq(1, 0),
+        Err(e) => assert_eq(e, "name must not be empty"),
     }
 }
