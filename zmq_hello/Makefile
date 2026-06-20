@@ -14,7 +14,7 @@
 #   make test-all      — run all test modes
 #   make check         — type-check all MVL sources
 #
-.PHONY: help guard-mvl guard-pyzmq install check prove fmt lint build test test-zmq test-rust \
+.PHONY: help version guard-mvl guard-pyzmq install check prove fmt lint build test test-zmq test-rust \
         test-pushpull test-pubsub test-all run run-zmtp clean smoke test-solver \
         assurance assurance-verbose coverage
 
@@ -32,6 +32,9 @@ TIMEOUT   := 10   # seconds to wait for server to bind
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-14s\033[0m %s\n", $$1, $$2}'
+
+version: ## Show package version from mvl.toml
+	@grep '^version' $(DIR)mvl.toml | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/'
 
 guard-mvl: ## Validate MVL binary is present
 	@$(MVL) --version > /dev/null 2>&1 || { \
