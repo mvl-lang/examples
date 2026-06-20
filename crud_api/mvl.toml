@@ -9,4 +9,4 @@ requires-mvl = ">=0.205.0"
 "github.com/mvl-lang/pkg-sqlite" = { git = "https://github.com/mvl-lang/pkg-sqlite", tag = "v0.2.0", rationale = "SQLite FFI bindings via rusqlite — native code, not generatable" }
 "github.com/mvl-lang/pkg-trace" = { git = "https://github.com/mvl-lang/pkg-trace", tag = "v0.4.0", rationale = "Distributed tracing — pure MVL spans emitted as logfmt/JSON to stderr" }
 "github.com/mvl-lang/pkg-health" = { git = "https://github.com/mvl-lang/pkg-health", tag = "v0.2.0", rationale = "Health check endpoints for K8s liveness/readiness probes" }
-"github.com/mvl-lang/pkg-metrics" = { git = "https://github.com/mvl-lang/pkg-metrics", tag = "v0.2.0", rationale = "Prometheus-style counters, gauges, histograms with ! Metric effect" }
+"github.com/mvl-lang/pkg-metrics" = { git = "https://github.com/mvl-lang/pkg-metrics", tag = "v0.2.1", rationale = "Prometheus-style counters, gauges, histograms with ! Metric effect" }

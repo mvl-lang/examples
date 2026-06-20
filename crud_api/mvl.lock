@@ -24,9 +24,9 @@ git = "https://github.com/mvl-lang/pkg-trace"
 
 [[package]]
 name = "github.com/mvl-lang/pkg-metrics"
-version = "0.2.0"
-hash = "sha256:bcc5afbd699355693aa080b1405fa43b63f823acf43bd8545e6320aa2c3601a0"
-commit = "0989f6b7a87aa948e342822f140e4f896ae4eba0"
+version = "0.2.1"
+hash = "sha256:8ae1f5ad931a25764f6a34e6ed47018ceed6e20d5db0061399d01b627cfe772c"
+commit = "861dddfbc2f14649d2e04abdb10831c396c1b3f5"
 git = "https://github.com/mvl-lang/pkg-metrics"
 
 [[package]]
