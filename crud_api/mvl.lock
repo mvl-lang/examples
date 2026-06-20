@@ -7,13 +7,15 @@ version = "0.2.0"
 hash = "sha256:f5834383cdbb9ef16ee66714b7ffb8ab769aee3cae55ae901b5fbc8e77bc63f8"
 commit = "2ea67f7bc639efb5b126609b7320354ddedd1898"
 git = "https://github.com/mvl-lang/pkg-sqlite"
+last-checked = 1781992352
 
 [[package]]
 name = "github.com/mvl-lang/pkg-http"
-version = "0.2.3"
-hash = "sha256:f1605b1c88fedadaf9fb681c86326dce6ac2fe7a58d8c01fb0cd7b155302cd82"
-commit = "c3dd21618efb514caae9b76d9fa1a910afb077ae"
+version = "0.3.0"
+hash = "sha256:efe87211bb9409acba1b8cb446270f7998ecd0d9dd46c72966880edebc67ef83"
+commit = "ac6650535c6ff87e3c4e3fb6de7d300e1946bc82"
 git = "https://github.com/mvl-lang/pkg-http"
+last-checked = 1781992352
 
 [[package]]
 name = "github.com/mvl-lang/pkg-trace"
@@ -21,6 +23,7 @@ version = "0.4.0"
 hash = "sha256:7122b254afdc4711eb9064cd507b6dbea3c441a5647078836c85ecdd16396bcb"
 commit = "9113df617a3d0241c31189e74fa45c1bb64e250d"
 git = "https://github.com/mvl-lang/pkg-trace"
+last-checked = 1781992352
 
 [[package]]
 name = "github.com/mvl-lang/pkg-metrics"
@@ -28,10 +31,12 @@ version = "0.2.1"
 hash = "sha256:8ae1f5ad931a25764f6a34e6ed47018ceed6e20d5db0061399d01b627cfe772c"
 commit = "861dddfbc2f14649d2e04abdb10831c396c1b3f5"
 git = "https://github.com/mvl-lang/pkg-metrics"
+last-checked = 1781992352
 
 [[package]]
 name = "github.com/mvl-lang/pkg-health"
-version = "0.2.0"
-hash = "sha256:69a6a289198f29c1cdc12bfda7d66282dfbb420f89b9a43872afe41a6be000c8"
-commit = "5a981737bc55f2fc5dda464d0703c022b7948441"
+version = "0.3.0"
+hash = "sha256:38f443f6eb268cb35fd27f89dc9a3cb380edafd4747cd6b0c8042a6a8139c3b8"
+commit = "2b6a313ed22145b77eb38dad4c97a9659feca449"
 git = "https://github.com/mvl-lang/pkg-health"
+last-checked = 1781992352
