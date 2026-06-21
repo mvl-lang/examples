@@ -6,6 +6,8 @@ Example projects demonstrating MVL's compile-time verification features.
 
 | Example | Description | Requirements Demonstrated |
 |---------|-------------|---------------------------|
+| [actor_webserver](./actor_webserver/) | Concurrent HTTP server with actor-per-request | Actors, `iso` capability, Effects, layered Config |
+| [anthropic_chat](./anthropic_chat/) | Claude API client | IFC `Secret`/`Tainted`, Effects, env handling |
 | [crud_api](./crud_api/) | REST API over SQLite | Effects, IFC, Refinements, Config |
 | [sqlite_basic](./sqlite_basic/) | SQLite CRUD — insert, query, update, delete | Typed queries, Refinements, Totality |
 | [zmq_hello](./zmq_hello/) | ZMTP 3.x wire protocol — pure-MVL ZeroMQ | Effects, TCP networking, cross-language |
