@@ -1,0 +1,89 @@
+// input.mvl — pkg.tui Key → game Dir mapping.
+//
+// Converts pkg.tui's terminal Key enum to the game's Dir type. The pure
+// transform sits between the I/O shell (main.mvl) and the game logic
+// (game.mvl), preserving the effect-free testing surface.
+//
+// Game's `Dir` and pkg.tui's `Direction` are distinct types — renamed
+// locally to avoid the name clash at the use boundary.
+//
+// Assurance note: 0 extern blocks.
+use game::{Dir}
+
+use pkg.tui.{Key, Direction}
+
+// Convert a pkg.tui Key to a snake-game Dir.
+// Returns None for non-arrow keys (snake holds its current direction this tick).
+pub total fn key_to_direction(key: Key) -> Option[Dir] {
+    match key {
+        Key::Arrow(Direction::Up) => Some(Dir::Up),
+        Key::Arrow(Direction::Down) => Some(Dir::Down),
+        Key::Arrow(Direction::Left) => Some(Dir::Left),
+        Key::Arrow(Direction::Right) => Some(Dir::Right),
+        _ => None,
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+test fn up_arrow_maps_to_up() -> Unit {
+    let d: Option[Dir] = key_to_direction(Key::Arrow(Direction::Up));
+    let ok: Int = match d {
+        Some(Dir::Up) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn down_arrow_maps_to_down() -> Unit {
+    let d: Option[Dir] = key_to_direction(Key::Arrow(Direction::Down));
+    let ok: Int = match d {
+        Some(Dir::Down) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn left_arrow_maps_to_left() -> Unit {
+    let d: Option[Dir] = key_to_direction(Key::Arrow(Direction::Left));
+    let ok: Int = match d {
+        Some(Dir::Left) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn right_arrow_maps_to_right() -> Unit {
+    let d: Option[Dir] = key_to_direction(Key::Arrow(Direction::Right));
+    let ok: Int = match d {
+        Some(Dir::Right) => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn escape_maps_to_none() -> Unit {
+    let d: Option[Dir] = key_to_direction(Key::Escape);
+    let ok: Int = match d {
+        None => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn char_q_maps_to_none() -> Unit {
+    let d: Option[Dir] = key_to_direction(Key::Char("q"));
+    let ok: Int = match d {
+        None => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+test fn enter_maps_to_none() -> Unit {
+    let d: Option[Dir] = key_to_direction(Key::Enter);
+    let ok: Int = match d {
+        None => 1,
+        _ => 0,
+    };
+    assert_eq(ok, 1)
+}

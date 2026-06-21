@@ -1,0 +1,8 @@
+[package]
+name = "snake_game"
+version = "0.2.0"
+license = "Apache-2.0"
+requires-mvl = ">=0.184.0"
+
+[dependencies]
+"github.com/mvl-lang/pkg-tui" = { git = "https://github.com/mvl-lang/pkg-tui", tag = "v1.1.0", rationale = "Raw-mode terminal control, keypress input, ANSI styles — POSIX stty + escapes (no extra crates)" }

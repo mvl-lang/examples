@@ -1,0 +1,241 @@
+// main.mvl — game loop entry point for snake_game.
+//
+// Demonstrates the package model end-to-end: pkg-tui owns the trust boundary
+// (raw mode, key reads, ANSI styling), this example owns the game logic.
+//
+// Effect surface:
+//   game.mvl  = pure (no effects, fully testable)
+//   main.mvl  = ! Terminal + Random + Console (loop, rendering, input)
+//
+// Rendering lives here (not in a separate render.mvl) to keep all
+// pkg-tui Terminal calls in one file — a transpiler quirk emits broken
+// borrows for cross-package value types passed across files.
+//
+// Demonstrates:
+//   1. Req 7  (Effects):  effect boundary — game logic in game.mvl is pure;
+//                         I/O lives in main.mvl via pkg-tui's Terminal effect.
+//   2. Req 5  (Errors):   new_terminal returns Result; explicit failure path.
+//   3. Req 4  (Null):     Option[Dir] for ticks with no key press.
+//   4. Req 3  (Totality): game loop is partial (user-driven, not termination-proven).
+//
+// Usage:
+//   mvl run main.mvl
+//   make run
+use game::{Game, Board, Pos, Dir, apply_new_game, apply_update}
+
+use input::{key_to_direction}
+
+use pkg.tui.{Terminal, Key, Color, Style,
+              new_terminal, drop_terminal, read_key_timeout,
+              clear, set_cursor, print_styled,
+              style, bold_style, colored, bold_colored}
+
+use std.random.{int}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+// Place text at (row, col) with the given style.
+partial fn put(
+    term: val Terminal,
+    row: Int,
+    col: Int,
+    text: String,
+    s: Style,
+) -> Unit ! Terminal {
+    let _: Unit = set_cursor(term, row, col);
+    print_styled(term, text, s)
+}
+
+// Build a string of n dashes for the border lines.
+partial fn dashes(
+    n: Int,
+    acc: String,
+) -> String {
+    if n <= 0 {
+        acc
+    } else {
+        dashes(n - 1, acc.concat("-"))
+    }
+}
+
+// Draw left and right walls for game rows 0 .. max_row (0-indexed).
+// Terminal row = game_row + 2  (row 1 = top border, row 2 = game row 0).
+partial fn draw_walls(
+    term: val Terminal,
+    game_row: Int,
+    max_row: Int,
+    board_width: Int,
+) -> Unit ! Terminal {
+    if game_row > max_row {
+        ()
+    } else {
+        let term_row: Int = game_row + 2;
+        let plain: Style = style();
+        let _: Unit = put(term, term_row, 1, "|", plain);
+        let _: Unit = put(term, term_row, board_width + 2, "|", plain);
+        draw_walls(term, game_row + 1, max_row, board_width)
+    }
+}
+
+// Draw snake segments recursively.
+// First call: is_head=true → draws 'O' (bold green); subsequent calls: 'o' (green).
+partial fn draw_body(
+    term: val Terminal,
+    segs: List[Pos],
+    is_head: Bool,
+) -> Unit ! Terminal {
+    match segs.first() {
+        None => (),
+        Some(seg) => {
+            let ch: String = if is_head {
+                "O"
+            } else { "o" };
+            let s: Style = if is_head {
+                bold_colored(Color::Green)
+            } else { colored(Color::Green) };
+            let _: Unit = put(term, seg.y + 2, seg.x + 2, ch, s);
+            draw_body(term, segs.skip(1), false)
+        },
+    }
+}
+
+// Terminal position: game coords are 0-indexed; add 2 for top border + 1-index.
+partial fn render(
+    term: val Terminal,
+    game: Game,
+) -> Unit ! Terminal {
+    let _: Unit = clear(term);
+    let plain: Style = style();
+    let inner: String = dashes(game.board.width, "");
+    let border: String = "+".concat(inner).concat("+");
+    let _: Unit = put(term, 1, 1, border, plain);
+    let _: Unit = put(term, game.board.height + 2, 1, border, plain);
+    let _: Unit = draw_walls(term, 0, game.board.height - 1, game.board.width);
+    let _: Unit = put(term, game.food.y + 2, game.food.x + 2, "*", colored(Color::Red));
+    let _: Unit = draw_body(term, game.snake, true);
+    let score_line: String = "Score: ".concat(game.score.to_string()).concat("   (arrow keys to move, q to quit)");
+    put(term, game.board.height + 3, 1, score_line, bold_style())
+}
+
+// Border top and bottom
+// Side walls
+// Food (red)
+// Snake
+// Score line (below bottom border)
+// ── Random food placement ─────────────────────────────────────────────────────
+partial fn random_food(board: Board) -> Pos ! Random {
+    let x: Int = int(0, board.width - 1);
+    let y: Int = int(0, board.height - 1);
+    Pos { x: x, y: y }
+}
+
+// ── Status display ────────────────────────────────────────────────────────────
+partial fn show_status(
+    term: val Terminal,
+    board: Board,
+    msg: String,
+) -> Unit ! Terminal {
+    let _: Unit = set_cursor(term, board.height + 4, 1);
+    print_styled(term, msg, bold_colored(Color::Yellow))
+}
+
+// ── Key classification ────────────────────────────────────────────────────────
+// True iff the user pressed 'q' or Escape.
+total fn is_quit_key(key_opt: Option[Key]) -> Bool {
+    match key_opt {
+        None => false,
+        Some(k) => match k {
+            Key::Char(c) => c == "q",
+            Key::Escape => true,
+            _ => false,
+        },
+    }
+}
+
+// Convert key (if any) to a direction (None on no-key or non-arrow key).
+total fn dir_from_key(key_opt: Option[Key]) -> Option[Dir] {
+    match key_opt {
+        None => None,
+        Some(k) => key_to_direction(k),
+    }
+}
+
+// ── Game loop ────────────────────────────────────────────────────────────────
+/// Result of one play-through: did the user quit, and what was the score?
+pub type Outcome = struct {
+    quit: Bool,
+    score: Int,
+}
+
+partial fn game_loop(
+    term: val Terminal,
+    initial: Game,
+) -> Outcome ! Terminal + Random {
+    let game: ref Game = initial;
+    while true {
+        if !game.alive {
+            return Outcome { quit: false, score: game.score };
+        }
+        let kr: Result[Option[Key], String] = read_key_timeout(term, 275);
+        let key_opt: Option[Key] = match kr {
+            Ok(o) => o,
+            Err(_) => None,
+        };
+        if is_quit_key(key_opt) {
+            return Outcome { quit: true, score: game.score };
+        }
+        let dir: Option[Dir] = dir_from_key(key_opt);
+        let next_food: Pos = random_food(game.board);
+        game = apply_update(game, dir, next_food);
+        let _: Unit = render(term, game);
+    }
+    Outcome { quit: false, score: game.score }
+}
+
+// ── Lives loop ────────────────────────────────────────────────────────────────
+// Run up to `lives` lives, accumulating score. Returns -1 if user quit.
+partial fn lives_loop(
+    term: val Terminal,
+    lives: Int,
+    board: Board,
+) -> Int ! Terminal + Random {
+    let remaining: ref Int = lives;
+    let acc: ref Int = 0;
+    while remaining > 0 {
+        let start: Pos = Pos { x: 10, y: 10 };
+        let food: Pos = random_food(board);
+        let game: Game = apply_new_game(board, start, food);
+        let _: Unit = render(term, game);
+        let outcome: Outcome = game_loop(term, game);
+        if outcome.quit {
+            return -1;
+        }
+        acc = acc + outcome.score;
+        remaining = remaining - 1;
+        if remaining > 0 {
+            let msg: String = "Life lost! ".concat(remaining.to_string()).concat(" lives left — press any key to continue");
+            let _: Unit = show_status(term, board, msg);
+            match read_key_timeout(term, 30000) {
+                Ok(_) => (),
+                Err(_) => (),
+            }
+        }
+    }
+    acc
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+partial fn main() -> Unit ! Terminal + Random + Console {
+    match new_terminal() {
+        Err(msg) => println("snake_game: ".concat(msg)),
+        Ok(term) => {
+            let board: Board = Board { width: 40, height: 20 };
+            let score: Int = lives_loop(term, 3, board);
+            let _: Unit = drop_terminal(term);
+            if score < 0 {
+                println("Quit. Thanks for playing!")
+            } else {
+                println("Game over! Final score: ".concat(score.to_string()))
+            }
+        },
+    }
+}
