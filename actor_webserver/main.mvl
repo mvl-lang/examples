@@ -24,7 +24,7 @@
 // for the pkg.http actor API.
 
 use config::{ServerConfig, ConfigLoadError, load_config}
-use pkg.http.{Status, Method, Request, Response, HttpError, Router, MatchedRoute,
+use pkg.http.{HttpStatus, HttpMethod, Request, Response, HttpError, Router, MatchedRoute,
               parse_request, serialize_response, ok, not_found, error_response,
               new_router, route, dispatch, method_name}
 use std.net.{TcpListener, TcpStream, tcp_listen, tcp_accept, tcp_read_request, tcp_write,
@@ -88,7 +88,7 @@ actor RequestHandler {
                                 "health" => handle_health(req, matched.params),
                                 "users"  => handle_users(req, matched.params),
                                 "user"   => handle_user(req, matched.params),
-                                _        => error_response(HttpError { status: Status::Http404NotFound, detail: matched.name }),
+                                _        => error_response(HttpError { status: HttpStatus::Http404NotFound, detail: matched.name }),
                             },
                         }
                     },
@@ -146,9 +146,9 @@ partial fn main() -> Unit ! Console + Env + FileRead + Log + Net + Spawn + Send 
     });
 
     let router: Router = route(route(route(new_router(),
-        Method::Get, "/health",      "health"),
-        Method::Get, "/users",       "users"),
-        Method::Get, "/users/{id}",  "user");
+        HttpMethod::Get, "/health",      "health"),
+        HttpMethod::Get, "/users",       "users"),
+        HttpMethod::Get, "/users/{id}",  "user");
 
     match tcp_listen(cfg.host, cfg.port) {
         Err(e)       => logger.error("listen failed", {"error": net_error_msg(e)}),

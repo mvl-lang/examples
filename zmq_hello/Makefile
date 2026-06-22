@@ -14,7 +14,7 @@
 #   make test-all      — run all test modes
 #   make check         — type-check all MVL sources
 #
-.PHONY: help version guard-mvl guard-pyzmq install check prove fmt lint build test test-zmq test-rust \
+.PHONY: help version guard-pyzmq install check prove fmt lint build test test-zmq test-rust \
         test-pushpull test-pubsub test-all run run-zmtp clean smoke test-solver \
         assurance assurance-verbose coverage
 
@@ -36,15 +36,6 @@ help: ## Show this help
 version: ## Show package version from mvl.toml
 	@grep '^version' $(DIR)mvl.toml | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/'
 
-guard-mvl: ## Validate MVL binary is present
-	@$(MVL) --version > /dev/null 2>&1 || { \
-		echo ""; \
-		echo "  ERROR: MVL compiler not found at: $(MVL)"; \
-		echo "  Run 'make build' from the repo root first."; \
-		echo ""; \
-		exit 1; \
-	}
-
 guard-pyzmq: ## Ensure pyzmq is installed in the active venv
 	@python3 -c "import zmq" 2>/dev/null || { \
 		echo "  Installing pyzmq..."; \
@@ -59,19 +50,19 @@ build: install ## Build all MVL binaries
 	@$(MVL) build $(MVL_FLAGS) $(DIR)server_pull.mvl > /dev/null 2>&1
 	@$(MVL) build $(MVL_FLAGS) $(DIR)client_sub.mvl > /dev/null 2>&1
 
-check: guard-mvl ## Type-check all MVL sources
-	$(MVL) check $(MVL_FLAGS) $(DIR)
+check: install ## Type-check the example's MVL sources (not .mvl/pkg/)
+	@for f in $(DIR)*.mvl; do $(MVL) check $(MVL_FLAGS) "$$f" || exit 1; done
 
-prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+prove: install ## Prove per-call-site refinement proof layer breakdown
 	$(MVL) prove $(MVL_FLAGS) $(DIR)
 
-fmt: guard-mvl ## Format all MVL sources
+fmt: install ## Format all MVL sources
 	$(MVL) fmt $(DIR)
 
-lint: guard-mvl ## Lint all MVL sources
+lint: install ## Lint all MVL sources
 	$(MVL) lint $(MVL_FLAGS) $(DIR)
 
-test-solver: guard-mvl ## Show solver statistics
+test-solver: install ## Show solver statistics
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
 	for f in $(DIR)server.mvl $(DIR)server_zmtp.mvl $(DIR)server_pull.mvl $(DIR)client_sub.mvl; do \
@@ -301,18 +292,18 @@ test-pubsub: build guard-pyzmq ## ZMTP PUB/SUB: pyzmq PUB server + MVL SUB clien
 
 test-all: test test-zmq test-rust test-pushpull test-pubsub ## Run all test modes
 
-assurance: guard-mvl ## Generate assurance report
+assurance: install ## Generate assurance report
 	$(MVL) assurance $(MVL_FLAGS) $(DIR)
 
-assurance-verbose: guard-mvl ## Generate verbose assurance report
+assurance-verbose: install ## Generate verbose assurance report
 	$(MVL) assurance $(MVL_FLAGS) --verbose $(DIR)
 
-coverage: guard-mvl ## Generate coverage report
+coverage: install ## Generate coverage report
 	$(MVL) test $(MVL_FLAGS) --coverage $(DIR)
 
 # ── Package management ────────────────────────────────────────────────────────
 
-install: guard-mvl ## Fetch and verify all dependencies from mvl.lock
+install: ## Fetch and verify all dependencies from mvl.lock
 	$(MVL) install
 
 # ── Run / smoke ───────────────────────────────────────────────────────────────

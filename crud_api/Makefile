@@ -38,10 +38,7 @@ version: ## Show package version from mvl.toml
 	@grep '^version' $(DIR)mvl.toml | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/'
 
 # ── Build ──────────────────────────────────────────────────────────────────────
-guard-mvl:
-	@$(MVL) --version > /dev/null 2>&1 || { echo "mvl not found — install the MVL compiler first."; exit 1; }
-
-install: guard-mvl ## Fetch and verify all dependencies from mvl.lock
+install: ## Fetch and verify all dependencies from mvl.lock
 	$(MVL) install
 
 build: install ## Build the application
@@ -67,10 +64,10 @@ run-json: install ## Start server with JSON log format
 
 test: test-unit ## Run all tests
 
-test-unit: ## Run unit tests (config_test.mvl, main_test.mvl)
+test-unit: install ## Run unit tests (config_test.mvl, main_test.mvl)
 	$(MVL) test $(MVL_FLAGS) $(DIR)
 
-test-llvm: ## Run tests via LLVM backend
+test-llvm: install ## Run tests via LLVM backend
 	$(MVL) test $(MVL_FLAGS) $(DIR) --backend=llvm
 
 # API integration tests (requires server running in another terminal)
@@ -124,27 +121,27 @@ audit-clear: ## Clear audit log
 
 # ── Code Quality ───────────────────────────────────────────────────────────────
 
-fmt: guard-mvl ## Format all source files
+fmt: install ## Format all source files
 	$(MVL) fmt $(DIR)
 
-check: guard-mvl ## Type-check all source files
+check: install ## Type-check all source files
 	$(MVL) check $(MVL_FLAGS) $(DIR)
 
-lint: guard-mvl ## Lint all source files
+lint: install ## Lint all source files
 	$(MVL) lint $(MVL_FLAGS) $(DIR)
 
-prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
+prove: install ## Prove per-call-site refinement proof layer breakdown
 	$(MVL) prove $(MVL_FLAGS) $(DIR)
 
 # ── Assurance ──────────────────────────────────────────────────────────────────
 
-assurance: guard-mvl ## Generate assurance report
+assurance: install ## Generate assurance report
 	$(MVL) assurance $(MVL_FLAGS) $(DIR)
 
-assurance-verbose: guard-mvl ## Generate verbose assurance report
+assurance-verbose: install ## Generate verbose assurance report
 	$(MVL) assurance $(MVL_FLAGS) --verbose $(DIR)
 
-coverage: guard-mvl ## Generate coverage report
+coverage: install ## Generate coverage report
 	$(MVL) test $(MVL_FLAGS) --coverage $(DIR)
 
 # ── Clean ──────────────────────────────────────────────────────────────────────

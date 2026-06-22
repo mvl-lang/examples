@@ -3,7 +3,8 @@
 
 [[package]]
 name = "github.com/mvl-lang/pkg-http"
-version = "0.2.0"
-hash = "sha256:e9299bccffefba5712e5ba769cf760d4f235ec07c58f41a948ecc60235ad14c3"
-commit = "cdde87ab5650d79b3d8fcfdbdaae3bd1706c7cca"
+version = "0.4.0"
+hash = "sha256:b799a9fb555343ba0036b1534f5eaa30f76f2b876e8525212da19992b9fc0e8a"
+commit = "b1e149aac7cb3a266598df3339c4eac1bc9d6ea9"
 git = "https://github.com/mvl-lang/pkg-http"
+last-checked = 1782141632

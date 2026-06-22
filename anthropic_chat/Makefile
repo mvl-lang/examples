@@ -29,10 +29,7 @@ version: ## Show package version from mvl.toml
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 
-guard-mvl:
-	@$(MVL) --version > /dev/null 2>&1 || { echo "mvl not found — install the MVL compiler first."; exit 1; }
-
-install: guard-mvl ## Fetch and verify all dependencies from mvl.lock
+install: ## Fetch and verify all dependencies from mvl.lock
 	$(MVL) install
 
 build: install ## Build the application
@@ -59,11 +56,11 @@ test-llvm: install ## Run tests via LLVM backend
 
 # ── Code Quality ───────────────────────────────────────────────────────────────
 
-fmt: guard-mvl ## Format all source files
+fmt: install ## Format all source files
 	$(MVL) fmt $(DIR)
 
-check: install ## Type-check all source files
-	$(MVL) check $(MVL_FLAGS) $(DIR)
+check: install ## Type-check the example's source files (not .mvl/pkg/)
+	$(MVL) check $(MVL_FLAGS) $(DIR)main.mvl
 
 lint: install ## Lint all source files
 	$(MVL) lint $(MVL_FLAGS) $(DIR)

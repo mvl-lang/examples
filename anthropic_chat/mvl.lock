@@ -3,11 +3,11 @@
 
 [[package]]
 name = "github.com/mvl-lang/pkg-anthropic"
-version = "0.1.0"
-hash = "sha256:2ee018afa2da13d72fbab3efd499307434c8d891b9032e0833c2145c3ec7d826"
-commit = "f69a195e197551b8120416cfd85a2a7fafbec47d"
+version = "0.2.0"
+hash = "sha256:6f63edd0dea98132d17663fca0ab996eca5b10ece6b951dccf318994ce7dc2a6"
+commit = "3dfeac3a41ace160389bbd5c4f5fa5c9e5b602ad"
 git = "https://github.com/mvl-lang/pkg-anthropic"
-license = "Apache-2.0"
+last-checked = 1782141633
 
 [[package]]
 name = "github.com/mvl-lang/pkg-tls"

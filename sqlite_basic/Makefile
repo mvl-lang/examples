@@ -20,10 +20,7 @@ help: ## Show this help
 version: ## Show package version from mvl.toml
 	@grep '^version' $(DIR)mvl.toml | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/'
 
-guard-mvl:
-	@$(MVL) --version > /dev/null 2>&1 || { echo "mvl not found — install the MVL compiler first."; exit 1; }
-
-install: guard-mvl ## Fetch and verify all dependencies from mvl.lock
+install: ## Fetch and verify all dependencies from mvl.lock
 	$(MVL) install
 
 check: install ## Type-check all source files
@@ -44,10 +41,10 @@ assurance-verbose: install ## Generate verbose assurance report
 coverage: install ## Generate branch coverage report
 	$(MVL) test --coverage $(DIR)
 
-fmt: guard-mvl ## Format all source files
+fmt: install ## Format all source files
 	$(MVL) fmt $(DIR)
 
-lint: guard-mvl ## Lint all source files
+lint: install ## Lint all source files
 	$(MVL) lint $(DIR)
 
 run: install ## Run the example (in-memory database)
