@@ -20,11 +20,12 @@ use models::{User, CreateUserRequest, UpdateUserRequest}
 
 use db::{db_list_users, db_get_user, db_create_user, db_update_user, db_delete_user}
 
-use pkg.http.{Request, Response, MatchedRoute,
-              json_ok_str, json_created_str, json_no_content, json_error,
-              param_int, body_obj, json_field_string,
-              http_not_found, http_bad_request, http_internal_error,
-              json_str, status_code}
+use pkg.http.{Request, Response, MatchedRoute, status_code}
+
+use pkg.rest.json.{json_ok_str, json_created_str, json_no_content, json_error,
+                   param_int, body_obj, json_field_string,
+                   http_not_found, http_bad_request, http_internal_error,
+                   json_str}
 
 use pkg.sqlite.{SqliteDb}
 

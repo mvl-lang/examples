@@ -42,10 +42,12 @@ use seed::{db_seed_from_csv}
 use handlers::{list_users_handler, get_user_handler, create_user_handler,
                update_user_handler, delete_user_handler}
 
-use pkg.http.{Method, Request, Response, HttpError, Router, MatchedRoute, HttpStatus,
+use pkg.http.{HttpMethod, Request, Response, HttpError, Router, MatchedRoute, HttpStatus,
               parse_request, serialize_response, error_response,
               new_router, route, dispatch, status_code,
-              json_error, http_internal_error, method_name}
+              method_name}
+
+use pkg.rest.json.{json_error, http_internal_error}
 
 use pkg.sqlite.{SqliteDb, close}
 
@@ -112,15 +114,15 @@ fn log_packages(
 total fn setup_router() -> Router {
     let r: Router = new_router();
     // Health endpoints (K8s probes)
-    let r: Router = route(r, Method::Get, "/health", "health");
-    let r: Router = route(r, Method::Get, "/health/live", "health_live");
-    let r: Router = route(r, Method::Get, "/health/ready", "health_ready");
+    let r: Router = route(r, HttpMethod::Get, "/health", "health");
+    let r: Router = route(r, HttpMethod::Get, "/health/live", "health_live");
+    let r: Router = route(r, HttpMethod::Get, "/health/ready", "health_ready");
     // CRUD endpoints
-    let r: Router = route(r, Method::Get, "/users", "list_users");
-    let r: Router = route(r, Method::Post, "/users", "create_user");
-    let r: Router = route(r, Method::Get, "/users/{id}", "get_user");
-    let r: Router = route(r, Method::Put, "/users/{id}", "update_user");
-    route(r, Method::Delete, "/users/{id}", "delete_user")
+    let r: Router = route(r, HttpMethod::Get, "/users", "list_users");
+    let r: Router = route(r, HttpMethod::Post, "/users", "create_user");
+    let r: Router = route(r, HttpMethod::Get, "/users/{id}", "get_user");
+    let r: Router = route(r, HttpMethod::Put, "/users/{id}", "update_user");
+    route(r, HttpMethod::Delete, "/users/{id}", "delete_user")
 }
 
 // ── Health check handlers ─────────────────────────────────────────────────────

@@ -3,19 +3,19 @@
 
 [[package]]
 name = "github.com/mvl-lang/pkg-sqlite"
-version = "0.2.0"
-hash = "sha256:f5834383cdbb9ef16ee66714b7ffb8ab769aee3cae55ae901b5fbc8e77bc63f8"
-commit = "2ea67f7bc639efb5b126609b7320354ddedd1898"
+version = "0.2.1"
+hash = "sha256:612af84482fe4d92f7e81f557abce0794cc6f2182eefea55f1d6d1ce4f8947b5"
+commit = "817e8bcb92d8dc04be7d73c4dfe18d671bfbbfb0"
 git = "https://github.com/mvl-lang/pkg-sqlite"
-last-checked = 1781992352
+last-checked = 1782157445
 
 [[package]]
 name = "github.com/mvl-lang/pkg-http"
-version = "0.3.0"
-hash = "sha256:efe87211bb9409acba1b8cb446270f7998ecd0d9dd46c72966880edebc67ef83"
-commit = "ac6650535c6ff87e3c4e3fb6de7d300e1946bc82"
+version = "0.5.0"
+hash = "sha256:c834daea25b5fcb8a684ef382672d76c15801b64dcd1f6f5c7509f69c039e2ee"
+commit = "fe0556b40e5cd0b11eee6e890691756816e8ba19"
 git = "https://github.com/mvl-lang/pkg-http"
-last-checked = 1781992352
+last-checked = 1782157445
 
 [[package]]
 name = "github.com/mvl-lang/pkg-trace"
@@ -23,7 +23,7 @@ version = "0.4.0"
 hash = "sha256:7122b254afdc4711eb9064cd507b6dbea3c441a5647078836c85ecdd16396bcb"
 commit = "9113df617a3d0241c31189e74fa45c1bb64e250d"
 git = "https://github.com/mvl-lang/pkg-trace"
-last-checked = 1781992352
+last-checked = 1782157445
 
 [[package]]
 name = "github.com/mvl-lang/pkg-metrics"
@@ -31,12 +31,20 @@ version = "0.2.1"
 hash = "sha256:8ae1f5ad931a25764f6a34e6ed47018ceed6e20d5db0061399d01b627cfe772c"
 commit = "861dddfbc2f14649d2e04abdb10831c396c1b3f5"
 git = "https://github.com/mvl-lang/pkg-metrics"
-last-checked = 1781992352
+last-checked = 1782157445
 
 [[package]]
 name = "github.com/mvl-lang/pkg-health"
-version = "0.3.0"
-hash = "sha256:38f443f6eb268cb35fd27f89dc9a3cb380edafd4747cd6b0c8042a6a8139c3b8"
-commit = "2b6a313ed22145b77eb38dad4c97a9659feca449"
+version = "0.4.1"
+hash = "sha256:e079ef5436737e919dda49dca49d0630daab99fed39764bcaa5f3a0ade0f9f2a"
+commit = "0382ace42932fde2730092e917c67e20650cfdca"
 git = "https://github.com/mvl-lang/pkg-health"
-last-checked = 1781992352
+last-checked = 1782157445
+
+[[package]]
+name = "github.com/mvl-lang/pkg-rest"
+version = "0.4.2"
+hash = "sha256:f1eda916c5ec4062faa2f1844c84fb5a921d6a22726ce6b16d87be1a54285e46"
+commit = "1ec00c224e4c4ecda5b6595d357eb3aaa6267220"
+git = "https://github.com/mvl-lang/pkg-rest"
+last-checked = 1782157445
