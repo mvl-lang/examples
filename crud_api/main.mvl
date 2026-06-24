@@ -49,7 +49,7 @@ use pkg.http.{HttpMethod, Request, Response, HttpError, Router, MatchedRoute, Ht
 
 use pkg.rest.json.{json_error, http_internal_error}
 
-use pkg.sqlite.{SqliteDb, close}
+use pkg.sqlite.{SqliteDb, execute, close}
 
 use std.net.{TcpListener, TcpStream, NetError,
              tcp_listen, tcp_accept, tcp_read_request, tcp_write,
@@ -65,7 +65,7 @@ use std.runtime.{manifest, Manifest, PackageInfo}
 
 use pkg.trace.{Trace, Tracer, default_tracer, trace_start, span_end, span_error, TraceContext}
 use pkg.health.{HealthStatus, HealthReport, ComponentHealth, make_report, health_to_response}
-use pkg.metrics.{effect Metric, counter_inc, histogram_observe, start_prometheus_exporter}
+use pkg.metrics.{effect Metric, Metrics, new_metrics}
 
 // ── Observability effect ──────────────────────────────────────────────────────
 //
@@ -77,7 +77,7 @@ effect Observability > Log + Audit + Trace + Metric
 //
 // Bundles all effects used by `main` into a single named alias so the
 // function signature stays below the complexity-effect-width limit (max 3).
-effect AppIO > DB + Env + FileRead + FileWrite + Net + Observability
+effect AppIO > DB + Env + FileRead + FileWrite + Net + Observability + Spawn
 
 // ── Pre-listen admission ────────────────────────────────────────────────────
 //
@@ -134,7 +134,7 @@ total fn setup_router() -> Router {
 
 /// Check if database is responsive (simple ping query).
 partial fn check_db_health(val db: SqliteDb) -> Bool ! DB {
-    match db.execute("SELECT 1") {
+    match execute(db, "SELECT 1", []) {
         Ok(_) => true,
         Err(_) => false,
     }
@@ -201,12 +201,13 @@ partial fn handle_request(
     val auditor: AuditLogger,
     val tracer: Tracer,
     val ctx: TraceContext,
+    val metrics: Metrics,
     version: String,
     req: Request,
     matched: MatchedRoute,
 ) -> Response ! DB + Observability {
     // Emit request counter metric
-    counter_inc("http_requests_total", {"method": method_name(req.method), "route": matched.name});
+    metrics.counter_inc("http_requests_total", {"method": method_name(req.method), "route": matched.name});
     logger.debug("dispatch", {"route": matched.name, "method": method_name(req.method), "path": req.path, "trace_id": ctx.trace_id});
     let resp: Response = match matched.name {
         // Health endpoints
@@ -222,7 +223,7 @@ partial fn handle_request(
         _ => json_error(http_internal_error("unknown route")),
     };
     // Emit response counter metric
-    counter_inc("http_responses_total", {"status": status_code(resp.status).to_string(), "route": matched.name});
+    metrics.counter_inc("http_responses_total", {"status": status_code(resp.status).to_string(), "route": matched.name});
     resp
 }
 
@@ -240,6 +241,7 @@ partial fn process_stream(
     val auditor: AuditLogger,
     val tracer: Tracer,
     val router: Router,
+    val metrics: Metrics,
     version: String,
     stream: TcpStream,
 ) -> Unit ! DB + Net + Observability {
@@ -259,7 +261,7 @@ partial fn process_stream(
                     logger.warn("not_found", {"status": status_code(e.status).to_string(), "error": e.detail, "method": method_name(req.method), "path": req.path, "trace_id": req_ctx.trace_id});
                     error_response(e)
                 },
-                Ok(matched) => handle_request(db, logger, auditor, tracer, req_ctx, version, req, matched),
+                Ok(matched) => handle_request(db, logger, auditor, tracer, req_ctx, metrics, version, req, matched),
             },
         },
     };
@@ -284,6 +286,7 @@ partial fn serve(
     val auditor: AuditLogger,
     val tracer: Tracer,
     val router: Router,
+    val metrics: Metrics,
     version: String,
 ) -> Unit ! DB + Net + Observability {
     while true {
@@ -299,7 +302,7 @@ partial fn serve(
                 tcp_close_listener(listener);
                 return;
             },
-            Ok(stream) => process_stream(db, logger, auditor, tracer, router, version, stream),
+            Ok(stream) => process_stream(db, logger, auditor, tracer, router, metrics, version, stream),
         }
     }
 }
@@ -344,12 +347,8 @@ partial fn main() -> Unit ! AppIO {
     logger.info("database", {"db_path": cfg.db_path});
     logger.info("audit", {"audit_path": cfg.audit_path});
 
-    // Start Prometheus metrics exporter on port 9090
-    let metrics_addr: String = cfg.host.concat(":9090");
-    match start_prometheus_exporter(metrics_addr) {
-        Err(e) => logger.warn("metrics exporter failed", {"error": e}),
-        Ok(_) => logger.info("metrics", {"endpoint": "http://".concat(metrics_addr).concat("/metrics")}),
-    }
+    let metrics: Metrics = new_metrics();
+    logger.info("metrics", {"status": "initialized"});
 
     if cfg.seed_file != "" {
         logger.info("seeding from CSV", {"path": cfg.seed_file});
@@ -362,7 +361,7 @@ partial fn main() -> Unit ! AppIO {
     span_end(tracer, boot_ctx);
     match tcp_listen(cfg.host, cfg.port) {
         Err(e) => logger.error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => serve(db, listener, logger, auditor, tracer, router, m.app_version),
+        Ok(listener) => serve(db, listener, logger, auditor, tracer, router, metrics, m.app_version),
     }
 }
 // Req 10: prove the literal default port lies in the valid TCP range.
