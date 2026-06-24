@@ -9,6 +9,12 @@
 // Assurance note: 0 extern blocks.
 
 // ── Type re-declarations (workaround: #96) ────────────────────────────────
+//
+// NOTE: do NOT re-declare `Request` here — pkg.http defines it with 5 fields
+// (method, path, query, headers, body).  A local re-declaration with fewer
+// fields shadows the pkg.http definition in the combined test build and causes
+// Rust E0609/E0560 errors in pkg.http functions that access the missing fields.
+// Use the local `TestRequest` alias below instead.
 
 type HttpStatus = enum {
     Http200Ok,
@@ -36,7 +42,9 @@ type HttpStatus = enum {
 
 type HttpMethod = enum { Get, Post, Put, Delete, Patch, Head, Options }
 
-type Request = struct {
+// Routing-only test struct: only method + path are needed for route dispatch.
+// Named `TestRequest` (not `Request`) to avoid shadowing the pkg.http type.
+type TestRequest = struct {
     method: HttpMethod,
     path:   String,
 }
@@ -66,7 +74,7 @@ fn error_response(e: val HttpError) -> Response {
     Response { status: e.status, headers: {"Content-Type": "text/plain"}, body: e.detail }
 }
 
-fn route(req: val Request) -> Result[Response, HttpError] {
+fn route(req: val TestRequest) -> Result[Response, HttpError] {
     if req.path.starts_with("/health") {
         Ok(ok("ok"))
     } else if req.path.starts_with("/users") {
@@ -76,15 +84,15 @@ fn route(req: val Request) -> Result[Response, HttpError] {
     }
 }
 
-fn handle_route(req: val Request) -> Response {
+fn handle_route(req: val TestRequest) -> Response {
     match route(req) {
         Ok(r)  => r,
         Err(e) => error_response(e),
     }
 }
 
-fn make_request(method: HttpMethod, path: String) -> Request {
-    Request { method: method, path: path }
+fn make_request(method: HttpMethod, path: String) -> TestRequest {
+    TestRequest { method: method, path: path }
 }
 
 // ── Routing tests ─────────────────────────────────────────────────────────
