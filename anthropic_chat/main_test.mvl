@@ -1,0 +1,153 @@
+// anthropic_chat/main_test.mvl — unit tests for pure display-formatting logic.
+//
+// Tests the string-building logic from display_response and display_error
+// without Console, Net, or Env effects.
+//
+// Types are re-declared inline: cross-file type resolution is not yet wired
+// into the per-file checker (issue #96).
+//
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations (workaround: #96) ────────────────────────────────
+
+type HttpsError = enum {
+    InvalidUrl(String),
+    ConnectionFailed(String),
+    InvalidResponse(String),
+}
+
+type AnthropicError = enum {
+    HttpError(HttpsError),
+    JsonParseError(String),
+    ApiError(Int, String),
+    MissingField(String),
+}
+
+type Usage = struct {
+    input_tokens:  Int,
+    output_tokens: Int,
+}
+
+// ── Pure helpers mirrored from main.mvl display logic ────────────────────
+
+fn https_error_msg(e: val HttpsError) -> String {
+    match e {
+        HttpsError::InvalidUrl(msg)       => "invalid URL: ".concat(msg),
+        HttpsError::ConnectionFailed(msg) => "HTTPS connection failed: ".concat(msg),
+        HttpsError::InvalidResponse(msg)  => "invalid response: ".concat(msg),
+    }
+}
+
+fn anthropic_error_msg(e: val AnthropicError) -> String {
+    match e {
+        AnthropicError::HttpError(he)       => "https: ".concat(https_error_msg(he)),
+        AnthropicError::JsonParseError(msg) => "json: ".concat(msg),
+        AnthropicError::ApiError(code, msg) => "api error ".concat(code.to_string()).concat(": ").concat(msg),
+        AnthropicError::MissingField(f)     => "missing field: ".concat(f),
+    }
+}
+
+fn format_error(e: val AnthropicError) -> String {
+    "error: ".concat(anthropic_error_msg(e))
+}
+
+fn format_usage(u: Usage) -> String {
+    "Tokens: ".concat(u.input_tokens.to_string())
+        .concat(" in, ")
+        .concat(u.output_tokens.to_string())
+        .concat(" out")
+}
+
+fn format_model(model: String) -> String {
+    "Model: ".concat(model)
+}
+
+fn format_content(content: String) -> String {
+    "Response: ".concat(content)
+}
+
+// ── Error formatting tests ────────────────────────────────────────────────
+
+test fn test_display_error_http_connection() -> Unit {
+    let e: AnthropicError = AnthropicError::HttpError(HttpsError::ConnectionFailed("refused"));
+    assert_eq(format_error(e), "error: https: HTTPS connection failed: refused")
+}
+
+test fn test_display_error_http_invalid_url() -> Unit {
+    let e: AnthropicError = AnthropicError::HttpError(HttpsError::InvalidUrl("bad://host"));
+    assert_eq(format_error(e), "error: https: invalid URL: bad://host")
+}
+
+test fn test_display_error_http_invalid_response() -> Unit {
+    let e: AnthropicError = AnthropicError::HttpError(HttpsError::InvalidResponse("empty body"));
+    assert_eq(format_error(e), "error: https: invalid response: empty body")
+}
+
+test fn test_display_error_json_parse() -> Unit {
+    let e: AnthropicError = AnthropicError::JsonParseError("unexpected token");
+    assert_eq(format_error(e), "error: json: unexpected token")
+}
+
+test fn test_display_error_api_rate_limit() -> Unit {
+    let e: AnthropicError = AnthropicError::ApiError(429, "rate limited");
+    assert_eq(format_error(e), "error: api error 429: rate limited")
+}
+
+test fn test_display_error_api_unauthorized() -> Unit {
+    let e: AnthropicError = AnthropicError::ApiError(401, "invalid api key");
+    assert_eq(format_error(e), "error: api error 401: invalid api key")
+}
+
+test fn test_display_error_api_server_error() -> Unit {
+    let e: AnthropicError = AnthropicError::ApiError(500, "internal server error");
+    assert_eq(format_error(e), "error: api error 500: internal server error")
+}
+
+test fn test_display_error_missing_field() -> Unit {
+    let e: AnthropicError = AnthropicError::MissingField("content");
+    assert_eq(format_error(e), "error: missing field: content")
+}
+
+// ── Usage formatting tests ────────────────────────────────────────────────
+
+test fn test_format_usage_basic() -> Unit {
+    let u: Usage = Usage { input_tokens: 12, output_tokens: 42 };
+    assert_eq(format_usage(u), "Tokens: 12 in, 42 out")
+}
+
+test fn test_format_usage_zeros() -> Unit {
+    let u: Usage = Usage { input_tokens: 0, output_tokens: 0 };
+    assert_eq(format_usage(u), "Tokens: 0 in, 0 out")
+}
+
+test fn test_format_usage_large_counts() -> Unit {
+    let u: Usage = Usage { input_tokens: 100000, output_tokens: 4096 };
+    assert_eq(format_usage(u), "Tokens: 100000 in, 4096 out")
+}
+
+test fn test_format_usage_single_token() -> Unit {
+    let u: Usage = Usage { input_tokens: 1, output_tokens: 1 };
+    assert_eq(format_usage(u), "Tokens: 1 in, 1 out")
+}
+
+// ── Model and content label tests ─────────────────────────────────────────
+
+test fn test_format_model_sonnet() -> Unit {
+    assert_eq(format_model("claude-sonnet-4-6"), "Model: claude-sonnet-4-6")
+}
+
+test fn test_format_model_haiku() -> Unit {
+    assert_eq(format_model("claude-haiku-4-5-20251001"), "Model: claude-haiku-4-5-20251001")
+}
+
+test fn test_format_model_opus() -> Unit {
+    assert_eq(format_model("claude-opus-4-6"), "Model: claude-opus-4-6")
+}
+
+test fn test_format_content_basic() -> Unit {
+    assert_eq(format_content("MVL is a language."), "Response: MVL is a language.")
+}
+
+test fn test_format_content_empty() -> Unit {
+    assert_eq(format_content(""), "Response: ")
+}
