@@ -40,11 +40,15 @@ use pkg.trace.{Trace, Tracer, span_start, span_end, TraceContext}
 // ── JSON encoding helpers ─────────────────────────────────────────────────────
 //
 // Pure transformations — marked `total` for termination proof.
-total fn user_to_json(val u: User) -> String {
+total fn user_to_json(val u: User) -> String
+    ensures result.len() > 0
+{
     "{\"id\":".concat(u.id.to_string()).concat(",\"name\":").concat(json_str(u.name)).concat(",\"email\":").concat(json_str(u.email)).concat("}")
 }
 
-total fn users_to_json(users: List[User]) -> String {
+total fn users_to_json(users: List[User]) -> String
+    ensures result.len() > 0
+{
     let acc: ref String = "";
     let first: ref Bool = true;
     for u in users {

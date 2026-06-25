@@ -45,7 +45,11 @@ pub total fn new_game(
     board: Board,
     start: Pos,
     food: Pos,
-) -> Game {
+) -> Game
+    ensures result.alive == true
+    ensures result.score == 0
+    ensures result.snake.len() == 1
+{
     Game { snake: [start], direction: Dir::Right, food: food, score: 0, alive: true, board: board }
 }
 
@@ -107,7 +111,10 @@ total fn resolve_dir(
 pub total fn is_wall(
     pos: Pos,
     board: Board,
-) -> Bool {
+) -> Bool
+    ensures !result || pos.x < 0 || pos.y < 0 || pos.x >= board.width || pos.y >= board.height
+    ensures result || (pos.x >= 0 && pos.y >= 0 && pos.x < board.width && pos.y < board.height)
+{
     pos.x < 0 || pos.y < 0 || pos.x >= board.width || pos.y >= board.height
 }
 
@@ -129,7 +136,10 @@ total fn update(
     game: Game,
     input: Option[Dir],
     next_food: Pos,
-) -> Game {
+) -> Game
+    ensures !result.alive || result.score >= game.score
+    ensures result.alive || result.score == game.score
+{
     let new_dir: Dir = resolve_dir(game.direction, input);
     let old_head: Pos = match game.snake.first() {
         None => Pos { x: 0, y: 0 },

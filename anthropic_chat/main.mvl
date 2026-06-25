@@ -25,12 +25,15 @@ use pkg.anthropic.{Claude, ModelId, Message, Role, Response, Usage,
 partial fn ask_claude(
     api_key: Secret[String],
     question: String,
-) -> Result[Response, AnthropicError] ! Net {
+    max_tokens: Int where self > 0 && self <= 4096,
+) -> Result[Response, AnthropicError] ! Net
+    requires question.len() > 0
+{
     let client: Claude = Claude::new(api_key);
     client.messages(
         ModelId::Sonnet4_6,
         [Message { role: Role::User, content: question }],
-        256,
+        max_tokens,
     )
 }
 
@@ -76,7 +79,7 @@ partial fn multi_turn(api_key: Secret[String]) -> Result[Response, AnthropicErro
 partial fn main() -> Unit ! Net + Console + Env {
     match get_secret("ANTHROPIC_API_KEY") {
         None => println("error: ANTHROPIC_API_KEY not set"),
-        Some(api_key) => match ask_claude(api_key, "What is MVL?") {
+        Some(api_key) => match ask_claude(api_key, "What is MVL?", 256) {
             Err(e) => display_error(e),
             Ok(resp) => display_response(resp),
         },

@@ -78,7 +78,9 @@ pub partial fn db_list_users(val db: SqliteDb) -> Result[List[User], String] ! D
 pub partial fn db_get_user(
     val db: SqliteDb,
     id: Int,
-) -> Result[Option[User], String] ! DB {
+) -> Result[Option[User], String] ! DB
+    requires id > 0
+{
     match query(db, "SELECT id, name, email FROM users WHERE id = ?", [DbValue::Int(id)]) {
         Err(_) => Err("get query failed"),
         Ok(rows) => match rows.get(0) {
@@ -144,7 +146,9 @@ pub partial fn db_update_user(
 pub partial fn db_delete_user(
     val db: SqliteDb,
     id: Int,
-) -> Result[Bool, String] ! DB {
+) -> Result[Bool, String] ! DB
+    requires id > 0
+{
     match execute(db, "DELETE FROM users WHERE id = ?", [DbValue::Int(id)]) {
         Err(_) => Err("delete failed"),
         Ok(_) => had_changes(db),

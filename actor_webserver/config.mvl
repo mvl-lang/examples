@@ -18,7 +18,7 @@ use std.log.{LogLevel, LogFormat, parse_log_level, parse_log_format}
 /// Resolved server configuration.
 pub type ServerConfig = struct {
     host:       String,
-    port:       Int,
+    port:       Int where self > 0 && self <= 65535,
     debug:      Bool,
     log_level:  LogLevel,
     log_format: LogFormat,
