@@ -1,0 +1,75 @@
+// server_pull_test.mvl — unit tests for pure server_pull helpers.
+//
+// Tests the statically-proven pure functions: clamp_to_registered,
+// double_offset, make_bind_addr, validate_frame, estimate_msg_size.
+
+test fn test_clamp_below_range() -> Unit {
+    assert_eq(clamp_to_registered(0), 1024)
+}
+
+test fn test_clamp_above_range() -> Unit {
+    assert_eq(clamp_to_registered(60000), 49151)
+}
+
+test fn test_clamp_in_range() -> Unit {
+    assert_eq(clamp_to_registered(5555), 5555)
+}
+
+test fn test_clamp_at_lower_bound() -> Unit {
+    assert_eq(clamp_to_registered(1024), 1024)
+}
+
+test fn test_clamp_at_upper_bound() -> Unit {
+    assert_eq(clamp_to_registered(49151), 49151)
+}
+
+test fn test_clamp_just_below_lower() -> Unit {
+    assert_eq(clamp_to_registered(1023), 1024)
+}
+
+test fn test_clamp_just_above_upper() -> Unit {
+    assert_eq(clamp_to_registered(49152), 49151)
+}
+
+test fn test_double_offset_zero() -> Unit {
+    assert_eq(double_offset(0), 0)
+}
+
+test fn test_double_offset_mid() -> Unit {
+    assert_eq(double_offset(50), 100)
+}
+
+test fn test_double_offset_max() -> Unit {
+    assert_eq(double_offset(100), 200)
+}
+
+test fn test_make_bind_addr_starts_with_tcp() -> Unit {
+    let port: Port = 5557;
+    assert(make_bind_addr("*", port).starts_with("tcp://"))
+}
+
+test fn test_make_bind_addr_contains_host() -> Unit {
+    let port: Port = 5557;
+    assert(make_bind_addr("localhost", port).contains("localhost"))
+}
+
+test fn test_make_bind_addr_contains_port() -> Unit {
+    let port: Port = 5557;
+    assert(make_bind_addr("*", port).contains("5557"))
+}
+
+test fn test_validate_frame_returns_capacity() -> Unit {
+    assert_eq(validate_frame(512, 1024), 1024)
+}
+
+test fn test_validate_frame_tight_margin() -> Unit {
+    assert_eq(validate_frame(1, 2), 2)
+}
+
+test fn test_estimate_msg_size_basic() -> Unit {
+    assert_eq(estimate_msg_size(3, 256), 768)
+}
+
+test fn test_estimate_msg_size_single_frame() -> Unit {
+    assert_eq(estimate_msg_size(1, 512), 512)
+}
