@@ -279,7 +279,7 @@ partial fn process_stream(
     }
 }
 
-partial fn serve(
+partial fn run_server_loop(
     val db: SqliteDb,
     listener: TcpListener,
     val logger: Logger,
@@ -361,7 +361,7 @@ partial fn main() -> Unit ! AppIO {
     span_end(tracer, boot_ctx);
     match tcp_listen(cfg.host, cfg.port) {
         Err(e) => logger.error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => serve(db, listener, logger, auditor, tracer, router, metrics, m.app_version),
+        Ok(listener) => run_server_loop(db, listener, logger, auditor, tracer, router, metrics, m.app_version),
     }
 }
 // Req 10: prove the literal default port lies in the valid TCP range.
