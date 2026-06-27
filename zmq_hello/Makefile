@@ -51,7 +51,7 @@ build: install ## Build all MVL binaries
 	@$(MVL) build $(MVL_FLAGS) $(DIR)client_sub.mvl > /dev/null 2>&1
 
 check: install ## Type-check the example's MVL sources (not .mvl/pkg/)
-	@for f in $(DIR)*.mvl; do $(MVL) check $(MVL_FLAGS) "$$f" || exit 1; done
+	$(MVL) check $(MVL_FLAGS) $(DIR)
 
 prove: install ## Prove per-call-site refinement proof layer breakdown
 	$(MVL) prove $(MVL_FLAGS) $(DIR)
