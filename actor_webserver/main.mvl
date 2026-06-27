@@ -110,7 +110,7 @@ actor RequestHandler {
 
 // ── Accept loop ───────────────────────────────────────────────────────────
 
-partial fn serve(listener: TcpListener, logger: val Logger, router: val Router) -> Unit ! Log + Net + Spawn + Send {
+partial fn run_server_loop(listener: TcpListener, logger: val Logger, router: val Router) -> Unit ! Log + Net + Spawn + Send {
     let running: ref Bool = true;
     while running {
         match tcp_accept(listener) {
@@ -155,6 +155,6 @@ partial fn main() -> Unit ! Console + Env + FileRead + Log + Net + Spawn + Send 
 
     match tcp_listen(cfg.host, cfg.port) {
         Err(e)       => logger.error("listen failed", {"error": net_error_msg(e)}),
-        Ok(listener) => serve(listener, logger, router),
+        Ok(listener) => run_server_loop(listener, logger, router),
     }
 }
