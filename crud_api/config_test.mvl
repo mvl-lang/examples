@@ -15,6 +15,7 @@ use std.log.{LogLevel, LogFormat, parse_log_level, parse_log_format}
 type CrudApiConfig = struct {
     host: String,
     port: Int,
+    metrics_port: Int,
     db_path: String,
     audit_path: String,
     seed_file: String,
@@ -24,11 +25,11 @@ type CrudApiConfig = struct {
 
 // ── Local helpers (workaround: #96) ──────────────────────────────────────────
 fn defaults() -> ConfigValue {
-    ConfigValue::Map({"host": ConfigValue::String("127.0.0.1"), "port": ConfigValue::Int(8080), "db_path": ConfigValue::String("/tmp/crud_api.db"), "audit_path": ConfigValue::String("./audit.jsonl"), "seed_file": ConfigValue::String(""), "log_level": ConfigValue::String("info"), "log_format": ConfigValue::String("plain")})
+    ConfigValue::Map({"host": ConfigValue::String("127.0.0.1"), "port": ConfigValue::Int(8080), "metrics_port": ConfigValue::Int(9090), "db_path": ConfigValue::String("/tmp/crud_api.db"), "audit_path": ConfigValue::String("./audit.jsonl"), "seed_file": ConfigValue::String(""), "log_level": ConfigValue::String("info"), "log_format": ConfigValue::String("plain")})
 }
 
 fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
-    Ok(CrudApiConfig { host: as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?, port: as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?, db_path: as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?, audit_path: as_string(get_path(cfg, "audit_path").unwrap_or(ConfigValue::String("./audit.jsonl")))?, seed_file: as_string(get_path(cfg, "seed_file").unwrap_or(ConfigValue::String("")))?, log_level: parse_log_level(as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info")))?), log_format: parse_log_format(as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain")))?) })
+    Ok(CrudApiConfig { host: as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?, port: as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?, metrics_port: as_int(get_path(cfg, "metrics_port").unwrap_or(ConfigValue::Int(9090)))?, db_path: as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?, audit_path: as_string(get_path(cfg, "audit_path").unwrap_or(ConfigValue::String("./audit.jsonl")))?, seed_file: as_string(get_path(cfg, "seed_file").unwrap_or(ConfigValue::String("")))?, log_level: parse_log_level(as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info")))?), log_format: parse_log_format(as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain")))?) })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
