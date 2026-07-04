@@ -21,6 +21,7 @@ use std.log.{LogLevel, LogFormat, parse_log_level, parse_log_format}
 pub type CrudApiConfig = struct {
     host: String,
     port: Int,
+    metrics_port: Int,
     db_path: String,
     audit_path: String,
     seed_file: String,
@@ -37,7 +38,7 @@ pub type ConfigLoadError = enum {
 //
 // Pure transformation — marked `total` for termination proof.
 total fn defaults() -> ConfigValue {
-    ConfigValue::Map({"host": ConfigValue::String("127.0.0.1"), "port": ConfigValue::Int(8080), "db_path": ConfigValue::String("/tmp/crud_api.db"), "audit_path": ConfigValue::String("./audit.jsonl"), "seed_file": ConfigValue::String(""), "log_level": ConfigValue::String("info"), "log_format": ConfigValue::String("plain")})
+    ConfigValue::Map({"host": ConfigValue::String("127.0.0.1"), "port": ConfigValue::Int(8080), "metrics_port": ConfigValue::Int(9090), "db_path": ConfigValue::String("/tmp/crud_api.db"), "audit_path": ConfigValue::String("./audit.jsonl"), "seed_file": ConfigValue::String(""), "log_level": ConfigValue::String("info"), "log_format": ConfigValue::String("plain")})
 }
 
 // ── Layer 2: TOML file ────────────────────────────────────────────────────────
@@ -59,13 +60,17 @@ partial fn load_toml_layer(
 
 // ── Layer 4: CLI args ─────────────────────────────────────────────────────────
 partial fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
-    let cli: Map[String, ArgValue] = parse_args([optional("host", ArgType::Str), optional("port", ArgType::Int), optional("db-path", ArgType::Str), optional("audit-path", ArgType::Str), optional("seed-file", ArgType::Str), optional("log-level", ArgType::Str), optional("log-format", ArgType::Str)]);
+    let cli: Map[String, ArgValue] = parse_args([optional("host", ArgType::Str), optional("port", ArgType::Int), optional("metrics-port", ArgType::Int), optional("db-path", ArgType::Str), optional("audit-path", ArgType::Str), optional("seed-file", ArgType::Str), optional("log-level", ArgType::Str), optional("log-format", ArgType::Str)]);
     let cfg: ConfigValue = match cli.get("host") {
         Some(ArgValue::Str(v)) => merge(cfg, ConfigValue::Map({"host": ConfigValue::String(v)})),
         _ => cfg,
     };
     let cfg: ConfigValue = match cli.get("port") {
         Some(ArgValue::Int(n)) => merge(cfg, ConfigValue::Map({"port": ConfigValue::Int(n)})),
+        _ => cfg,
+    };
+    let cfg: ConfigValue = match cli.get("metrics-port") {
+        Some(ArgValue::Int(n)) => merge(cfg, ConfigValue::Map({"metrics_port": ConfigValue::Int(n)})),
         _ => cfg,
     };
     let cfg: ConfigValue = match cli.get("db-path") {
@@ -93,6 +98,7 @@ partial fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
 
 // --host
 // --port
+// --metrics-port
 // --db-path
 // --audit-path
 // --seed-file
@@ -100,7 +106,7 @@ partial fn merge_cli_args(cfg: ConfigValue) -> ConfigValue ! Console + Env {
 // --log-format
 // ── Extract typed struct ───────────────────────────────────────────────────────
 partial fn extract(cfg: ConfigValue) -> Result[CrudApiConfig, ConfigError] {
-    Ok(CrudApiConfig { host: as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?, port: as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?, db_path: as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?, audit_path: as_string(get_path(cfg, "audit_path").unwrap_or(ConfigValue::String("./audit.jsonl")))?, seed_file: as_string(get_path(cfg, "seed_file").unwrap_or(ConfigValue::String("")))?, log_level: parse_log_level(as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info")))?), log_format: parse_log_format(as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain")))?) })
+    Ok(CrudApiConfig { host: as_string(get_path(cfg, "host").unwrap_or(ConfigValue::String("127.0.0.1")))?, port: as_int(get_path(cfg, "port").unwrap_or(ConfigValue::Int(8080)))?, metrics_port: as_int(get_path(cfg, "metrics_port").unwrap_or(ConfigValue::Int(9090)))?, db_path: as_string(get_path(cfg, "db_path").unwrap_or(ConfigValue::String("/tmp/crud_api.db")))?, audit_path: as_string(get_path(cfg, "audit_path").unwrap_or(ConfigValue::String("./audit.jsonl")))?, seed_file: as_string(get_path(cfg, "seed_file").unwrap_or(ConfigValue::String("")))?, log_level: parse_log_level(as_string(get_path(cfg, "log_level").unwrap_or(ConfigValue::String("info")))?), log_format: parse_log_format(as_string(get_path(cfg, "log_format").unwrap_or(ConfigValue::String("plain")))?) })
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────

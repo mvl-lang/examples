@@ -12,6 +12,8 @@
 //
 // Observability:
 //   Metrics: Prometheus endpoint on :9090/metrics (http_requests_total, http_responses_total)
+//            Served by a dedicated MetricsExporter actor on a second listener
+//            (configurable via --metrics-port / CRUD_API_METRICS_PORT).
 //   Tracing: Spans emitted to stderr (pkg-trace)
 //   Logging: Structured logs to stderr (std.log)
 //
@@ -61,11 +63,11 @@ use std.io.{path, IoError}
 
 use std.log.{Logger, default_logger, log_level_name, log_format_name}
 
-use std.runtime.{manifest, Manifest, PackageInfo}
+use std.runtime.{manifest, Manifest, PackageInfo, NativeDep, NativeKind}
 
 use pkg.trace.{Trace, Tracer, default_tracer, trace_start, span_end, span_error, TraceContext}
 use pkg.health.{HealthStatus, HealthReport, ComponentHealth, make_report, health_to_response}
-use pkg.metrics.{effect Metric, Metrics, new_metrics}
+use pkg.metrics.{effect Metric, Metrics, new_metrics, start_prometheus_exporter}
 
 // ── Observability effect ──────────────────────────────────────────────────────
 //
@@ -105,6 +107,66 @@ fn log_packages(
 ) -> Unit ! Log {
     for p in pkgs {
         logger.info("package", {"purl": p.purl})
+    }
+}
+
+fn native_kind_name(k: NativeKind) -> String {
+    match k {
+        NativeKind::Rust => "rust",
+        NativeKind::C    => "c",
+    }
+}
+
+fn log_native_deps(
+    val logger: Logger,
+    deps: List[NativeDep],
+) -> Unit ! Log {
+    for d in deps {
+        let intros: String = if d.introduced_by.is_empty() {
+            "project"
+        } else {
+            join_list(d.introduced_by, ",")
+        };
+        logger.info("native_dep", {
+            "purl":          d.purl,
+            "kind":          native_kind_name(d.kind),
+            "introduced_by": intros,
+        })
+    }
+}
+
+// ── Prometheus exporter actor ───────────────────────────────────────────────
+//
+// Runs the `/metrics` endpoint on a second listener so scrapers (Prometheus,
+// Grafana Agent, VictoriaMetrics vmagent) can pull counters without
+// interfering with the main API port. Owns its own accept loop via
+// tail-recursive `serve()` — the pattern used by pkg-http's HttpServer.
+//
+// We intentionally re-implement the accept loop here rather than calling
+// pkg-metrics' `start_prometheus_exporter`, because that helper is `partial`
+// and MVL actor behaviors must be `total`. See pkg-metrics ADR-0002.
+
+actor MetricsExporter {
+    metrics:  Metrics,
+    listener: TcpListener,
+    logger:   Logger,
+
+    pub fn serve() -> Unit ! Log + Net + Metric {
+        match tcp_accept(self.listener) {
+            Err(NetError::ConnectionReset) => self.serve(),
+            Err(NetError::Timeout)         => self.serve(),
+            Err(e) => {
+                self.logger.error("metrics.exporter", {"error": net_error_msg(e)});
+                tcp_close_listener(self.listener)
+            },
+            Ok(stream) => {
+                // Ownership of `stream` transfers to the Metrics registry
+                // actor via `serve_scrape`; it renders the Prometheus body
+                // and closes the socket.
+                self.metrics.serve_scrape(consume(stream));
+                self.serve()
+            },
+        }
     }
 }
 
@@ -323,7 +385,36 @@ partial fn main() -> Unit ! AppIO {
     logger.info("application", {"app": m.app_name, "version": m.app_version, "built": m.build.date, "service_id": boot_ctx.trace_id});
     logger.info("versions", {"mvl": m.mvl_version, "runtime": m.runtime_version, "stdlib": m.stdlib_version});
     log_packages(logger, m.packages);
+    log_native_deps(logger, m.native_deps);
     logger.info("source", {"digest": m.source_digest});
+
+    // Start metrics exporter FIRST so scrapers can observe the boot phase
+    // (DB open, seed, listen) and pick up startup counters immediately.
+    let metrics: Metrics = new_metrics();
+    logger.info("metrics", {"status": "initialized"});
+    match tcp_listen(cfg.host, cfg.metrics_port) {
+        Err(e) => logger.error("metrics.exporter", {
+            "status": "listen_failed",
+            "host":   cfg.host,
+            "port":   cfg.metrics_port.to_string(),
+            "error":  net_error_msg(e),
+        }),
+        Ok(metrics_listener) => {
+            logger.info("metrics.exporter", {
+                "status": "listening",
+                "host":   cfg.host,
+                "port":   cfg.metrics_port.to_string(),
+                "path":   "/metrics",
+            });
+            let exporter: MetricsExporter = actor MetricsExporter {
+                metrics:  metrics,
+                listener: metrics_listener,
+                logger:   logger,
+            };
+            exporter.serve()
+        },
+    }
+
     let db: SqliteDb = match db_open(cfg.db_path) {
         Err(msg) => {
             logger.error("db open failed", {"error": msg});
@@ -346,9 +437,6 @@ partial fn main() -> Unit ! AppIO {
     logger.info("logging", {"log_level": log_level_name(cfg.log_level), "log_format": log_format_name(cfg.log_format)});
     logger.info("database", {"db_path": cfg.db_path});
     logger.info("audit", {"audit_path": cfg.audit_path});
-
-    let metrics: Metrics = new_metrics();
-    logger.info("metrics", {"status": "initialized"});
 
     if cfg.seed_file != "" {
         logger.info("seeding from CSV", {"path": cfg.seed_file});
