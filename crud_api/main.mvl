@@ -51,7 +51,7 @@ use pkg.http.{HttpMethod, Request, Response, HttpError, Router, MatchedRoute, Ht
 
 use pkg.rest.json.{json_error, http_internal_error}
 
-use pkg.sqlite.{SqliteDb, execute, close}
+use pkg.sqlite.{SqliteDb, execute, query_scalar, close}
 
 use std.net.{TcpListener, TcpStream, NetError,
              tcp_listen, tcp_accept, tcp_read_request, tcp_write,
@@ -195,8 +195,12 @@ total fn setup_router() -> Router {
 //   /health/ready → 200 if DB is reachable, 503 otherwise
 
 /// Check if database is responsive (simple ping query).
+///
+/// Uses `query_scalar` (not `execute`): `execute` is for statements that do
+/// not return rows (INSERT/UPDATE/DELETE) and errors on any SELECT — which
+/// silently made `check_db_health` always report unhealthy. See #15.
 partial fn check_db_health(val db: SqliteDb) -> Bool ! DB {
-    match execute(db, "SELECT 1", []) {
+    match query_scalar(db, "SELECT 1", []) {
         Ok(_) => true,
         Err(_) => false,
     }
