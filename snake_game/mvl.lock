@@ -3,8 +3,8 @@
 
 [[package]]
 name = "github.com/mvl-lang/pkg-tui"
-version = "1.2.0"
-hash = "sha256:602d7122ca24e91da51baf3d1aa9f3bd80b3b8779532d31280e8b96b5c32305f"
-commit = "3f725cd9e6e6d999d7c3167f4ec09a65ad4437bc"
+version = "1.2.1"
+hash = "sha256:2c6fb898f05c2d3bc8145b6c747442d1f0297ff3fa6764454ac3b1c2956046ee"
+commit = "5330cf07ab70124abc8f8de099beeac521875ee7"
 git = "https://github.com/mvl-lang/pkg-tui"
-last-checked = 1782547389
+last-checked = 1783666741
