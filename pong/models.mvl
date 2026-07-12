@@ -20,11 +20,26 @@
 //
 // Assurance note: 0 extern blocks.
 
+// ── Position aliases ──────────────────────────────────────────────────────────
+//
+// Positions are refined `Int`s bounded by the maximum renderable field.
+// Named aliases so the shared 120 / 40 bounds appear exactly once — Ball,
+// Paddle, and any game.mvl helper that returns a coordinate reuses them.
+
+/// A horizontal position (column) within the maximum renderable field.
+pub type FieldCol = Int where self >= 0 && self <= 120
+
+/// A vertical position (row) within the maximum renderable field.
+pub type FieldRow = Int where self >= 0 && self <= 40
+
 // ── Field ──────────────────────────────────────────────────────────────────────
 
 /// Playfield dimensions.  Runtime-queried from the terminal at startup then
 /// frozen for the rest of the session — the refinements bound the range and
 /// the prover discharges them at construction sites.
+///
+/// The width/height bounds here are *sizes* (with a minimum for playability),
+/// not positions, so they don't share the FieldCol/FieldRow aliases.
 pub type Field = struct {
     width:  Int where self >= 20 && self <= 120,
     height: Int where self >= 10 && self <= 40,
@@ -41,8 +56,8 @@ pub type Field = struct {
 /// `vy` is a small angle — 0 (horizontal) or ±1.  Bounces off paddle
 /// corners may perturb it; a straight-line hit leaves it unchanged.
 pub type Ball = struct {
-    x:  Int where self >= 0 && self <= 120,
-    y:  Int where self >= 0 && self <= 40,
+    x:  FieldCol,
+    y:  FieldRow,
     vx: Int where self >= -3 && self <= 3 && self != 0,
     vy: Int where self >= -1 && self <= 1,
 }
@@ -55,7 +70,7 @@ pub type Ball = struct {
 /// combined with the per-field bounds proves the paddle always fits inside
 /// the maximum possible field — game.mvl narrows this to the current field.
 pub type Paddle = struct {
-    y:      Int where self >= 0 && self <= 40,
+    y:      FieldRow,
     height: Int where self >= 2 && self <= 8,
 } with invariant self.y + self.height <= 40
 
