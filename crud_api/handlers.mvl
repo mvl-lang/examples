@@ -15,7 +15,7 @@
 // Audit logging: All mutations (create/update/delete) emit audit events
 // with principal, action, resource, and outcome for compliance tracking.
 //
-// Effects: ! DB + Log + Audit (propagated from db.* and audit calls).
+// Effects: ! DB + Observability (= DB + Log + Audit + Trace + Metric).
 use models::{User, CreateUserRequest, UpdateUserRequest}
 
 use db::{db_list_users, db_get_user, db_create_user, db_update_user, db_delete_user}
@@ -36,6 +36,11 @@ use std.log.{Logger}
 use std.audit.{AuditLogger, AuditEvent, modify, access, deny}
 
 use pkg.trace.{Trace, Tracer, span_start, span_end, TraceContext}
+
+use pkg.metrics.{effect Metric, Metrics}
+
+// Bundles logging, audit, tracing, and metrics into a single effect alias.
+pub effect Observability > Log + Audit + Trace + Metric
 
 // ── JSON encoding helpers ─────────────────────────────────────────────────────
 //
@@ -71,9 +76,10 @@ pub partial fn list_users_handler(
     val auditor: AuditLogger,
     val tracer: Tracer,
     val ctx: TraceContext,
+    val metrics: Metrics,
     val req: Request,
     val matched: MatchedRoute,
-) -> Response ! DB + Log + Audit + Trace {
+) -> Response ! DB + Observability {
     let span: TraceContext = span_start("handler.list_users", ctx);
     logger.debug("handler", {"action": "list_users", "trace_id": ctx.trace_id});
     let resp: Response = match db_list_users(db) {
@@ -101,9 +107,10 @@ pub partial fn get_user_handler(
     val auditor: AuditLogger,
     val tracer: Tracer,
     val ctx: TraceContext,
+    val metrics: Metrics,
     val req: Request,
     val matched: MatchedRoute,
-) -> Response ! DB + Log + Audit + Trace {
+) -> Response ! DB + Observability {
     let span: TraceContext = span_start("handler.get_user", ctx);
     let resp: Response = match param_int(matched, "id") {
         Err(e) => json_error(e),
@@ -155,9 +162,10 @@ pub partial fn create_user_handler(
     val auditor: AuditLogger,
     val tracer: Tracer,
     val ctx: TraceContext,
+    val metrics: Metrics,
     val req: Request,
     val matched: MatchedRoute,
-) -> Response ! DB + Log + Audit + Trace {
+) -> Response ! DB + Observability {
     let span: TraceContext = span_start("handler.create_user", ctx);
     logger.debug("handler", {"action": "create_user", "trace_id": ctx.trace_id});
     let resp: Response = match parse_create_body(req) {
@@ -234,9 +242,10 @@ pub partial fn update_user_handler(
     val auditor: AuditLogger,
     val tracer: Tracer,
     val ctx: TraceContext,
+    val metrics: Metrics,
     val req: Request,
     val matched: MatchedRoute,
-) -> Response ! DB + Log + Audit + Trace {
+) -> Response ! DB + Observability {
     let span: TraceContext = span_start("handler.update_user", ctx);
     let resp: Response = match param_int(matched, "id") {
         Err(e) => json_error(e),
@@ -278,9 +287,10 @@ pub partial fn delete_user_handler(
     val auditor: AuditLogger,
     val tracer: Tracer,
     val ctx: TraceContext,
+    val metrics: Metrics,
     val req: Request,
     val matched: MatchedRoute,
-) -> Response ! DB + Log + Audit + Trace {
+) -> Response ! DB + Observability {
     let span: TraceContext = span_start("handler.delete_user", ctx);
     let resp: Response = match param_int(matched, "id") {
         Err(e) => json_error(e),

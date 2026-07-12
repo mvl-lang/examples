@@ -41,7 +41,8 @@ use db::{db_open, db_init}
 
 use seed::{db_seed_from_csv}
 
-use handlers::{list_users_handler, get_user_handler, create_user_handler,
+use handlers::{effect Observability,
+               list_users_handler, get_user_handler, create_user_handler,
                update_user_handler, delete_user_handler}
 
 use pkg.http.{HttpMethod, Request, Response, HttpError, Router, MatchedRoute, HttpStatus,
@@ -69,12 +70,6 @@ use pkg.trace.{Trace, Tracer, default_tracer, trace_start, span_end, span_error,
 use pkg.health.{HealthStatus, HealthReport, ComponentHealth, make_report, health_to_response}
 use pkg.metrics.{effect Metric, Metrics, new_metrics, start_prometheus_exporter}
 
-// ── Observability effect ──────────────────────────────────────────────────────
-//
-// Bundles logging, audit, tracing, and metrics into a single effect alias
-// for cleaner function signatures across handlers.
-effect Observability > Log + Audit + Trace + Metric
-
 // ── Composite effect ──────────────────────────────────────────────────────────
 //
 // Bundles all effects used by `main` into a single named alias so the
@@ -85,9 +80,11 @@ effect AppIO > DB + Env + FileRead + FileWrite + Net + Observability + Spawn
 //
 // Req 10 (Refinements) — `where` predicates carry a static guarantee that
 // the literal default port falls inside the IANA-valid TCP range.
-total fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int { p }
+total fn validate_port_range(p: Int where p > 0 && p < 65536) -> Int
+    ensures result > 0 && result < 65536
+{ p }
 
-fn format_packages(pkgs: List[PackageInfo]) -> String {
+total fn format_packages(pkgs: List[PackageInfo]) -> String {
     let result: ref String = "";
     let first: ref Bool = true;
     for p in pkgs {
@@ -101,7 +98,7 @@ fn format_packages(pkgs: List[PackageInfo]) -> String {
     result
 }
 
-fn log_packages(
+total fn log_packages(
     val logger: Logger,
     pkgs: List[PackageInfo],
 ) -> Unit ! Log {
@@ -110,14 +107,16 @@ fn log_packages(
     }
 }
 
-fn native_kind_name(k: NativeKind) -> String {
+total fn native_kind_name(k: NativeKind) -> String
+    ensures result.len() > 0
+{
     match k {
         NativeKind::Rust => "rust",
         NativeKind::C    => "c",
     }
 }
 
-fn log_native_deps(
+total fn log_native_deps(
     val logger: Logger,
     deps: List[NativeDep],
 ) -> Unit ! Log {
@@ -281,11 +280,11 @@ partial fn handle_request(
         "health_live" => health_live_handler(),
         "health_ready" => health_ready_handler(db),
         // CRUD endpoints
-        "list_users" => list_users_handler(db, logger, auditor, tracer, ctx, req, matched),
-        "get_user" => get_user_handler(db, logger, auditor, tracer, ctx, req, matched),
-        "create_user" => create_user_handler(db, logger, auditor, tracer, ctx, req, matched),
-        "update_user" => update_user_handler(db, logger, auditor, tracer, ctx, req, matched),
-        "delete_user" => delete_user_handler(db, logger, auditor, tracer, ctx, req, matched),
+        "list_users" => list_users_handler(db, logger, auditor, tracer, ctx, metrics, req, matched),
+        "get_user" => get_user_handler(db, logger, auditor, tracer, ctx, metrics, req, matched),
+        "create_user" => create_user_handler(db, logger, auditor, tracer, ctx, metrics, req, matched),
+        "update_user" => update_user_handler(db, logger, auditor, tracer, ctx, metrics, req, matched),
+        "delete_user" => delete_user_handler(db, logger, auditor, tracer, ctx, metrics, req, matched),
         _ => json_error(http_internal_error("unknown route")),
     };
     // Emit response counter metric
@@ -436,7 +435,10 @@ partial fn main() -> Unit ! AppIO {
     let router: Router = setup_router();
     let auditor: AuditLogger = file_audit_logger(path(cfg.audit_path));
     let tracer: Tracer = default_tracer();
-    let _: Result[Unit, IoError] = auditor.emit(modify("system", "service", "start").with_details({"instance_id": boot_ctx.trace_id, "app": m.app_name, "version": m.app_version, "packages": format_packages(m.packages)}));
+    match auditor.emit(modify("system", "service", "start").with_details({"instance_id": boot_ctx.trace_id, "app": m.app_name, "version": m.app_version, "packages": format_packages(m.packages)})) {
+        Err(e) => logger.warn("audit.startup", {"error": e}),
+        Ok(_) => { },
+    }
     logger.info("server", {"host": cfg.host, "port": cfg.port.to_string()});
     logger.info("logging", {"log_level": log_level_name(cfg.log_level), "log_format": log_format_name(cfg.log_format)});
     logger.info("database", {"db_path": cfg.db_path});
