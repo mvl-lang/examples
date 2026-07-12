@@ -26,10 +26,10 @@
 /// frozen for the rest of the session — the refinements bound the range and
 /// the prover discharges them at construction sites.
 ///
-/// The width/height bounds (20..120, 10..40) are repeated on Ball.x/y and
-/// Paddle.y — inline rather than aliased because MVL's named refined types
-/// are nominal today (see mvl-lang/mvl#TBD).  Once refined-type widening
-/// works, extract `FieldCol`/`FieldRow` aliases so the constants live once.
+/// The width/height bounds (20..120, 10..40) are repeated inline on Ball.x/y
+/// and Paddle.y.  Named aliases (`FieldCol`/`FieldRow`) would DRY these but
+/// require refined-int widening at comparison sites (`ball.y <= 0`) too —
+/// mvl-lang/mvl#1781 only widens at construction sites in 0.247.2.
 pub type Field = struct {
     width:  Int where self >= 20 && self <= 120,
     height: Int where self >= 10 && self <= 40,
@@ -145,8 +145,8 @@ pub type Config = struct {
 
 // ── IFC labels ────────────────────────────────────────────────────────────────
 //
-// The LeftInput / RightInput labels live in game.mvl instead of here.
-// Reason: mvl-lang/mvl#1780 — cross-file `use` of a user label loses the
-// `[T]` type argument, so labels must be colocated with all their
-// wrap/unwrap sites.  Once #1780 lands, labels move here and the
-// wrap-site audit trail lives in main.mvl per requirements.md §16.
+// LeftInput / RightInput labels + relabels live in game.mvl.  The #1780 fix
+// makes function-parameter labels work cross-file, but a `let` binding with
+// an explicit label type annotation (`let x: LeftInput[T] = ...`) still
+// parses/checks against a different type representation.  Since all `let`s
+// in MVL require explicit types, labels stay colocated for now.

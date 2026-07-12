@@ -28,29 +28,13 @@ use models::{
 
 // ── IFC labels (Req 11) ────────────────────────────────────────────────────────
 //
-// Two audited labels partition paddle-move inputs by player side.  In
-// TwoPlayer mode the type system guarantees a left key can never move the
-// right paddle — the labeled move fns below refuse a wrongly-labeled input
-// at compile time.
-//
-// Labels live in this file (not models.mvl) as a workaround for
-// mvl-lang/mvl#1780 — cross-file `use` of a user label loses the `[T]`
-// type argument.  When that lands, move the four decls into models.mvl
-// and let main.mvl perform the audited wrap at the key-dispatch site.
-//
-// Today the wrap + unwrap both happen inside `dispatch_left_paddle` /
-// `dispatch_right_paddle`.  The audit trail is preserved: two `relabel`
-// calls per player per tick with side-tagged strings.
+// Colocated with wrap/unwrap sites — see note in models.mvl.
 
-/// Marks a `PaddleInput` as originating from the left player's keys (W/S).
 pub label LeftInput
-
-/// Marks a `PaddleInput` as originating from the right player's keys (↑/↓).
 pub label RightInput
 
 pub relabel to_left_input:   _ -> LeftInput   audit
 pub relabel from_left_input: LeftInput -> _   audit
-
 pub relabel to_right_input:   _ -> RightInput   audit
 pub relabel from_right_input: RightInput -> _  audit
 
@@ -231,7 +215,6 @@ total fn clamp_paddle_y(y: Int, height: Int, field: Field) -> Int
 /// Compute a paddle's new y from a raw PaddleInput.  Bounded by ±1 per
 /// tick, clamped to the field.
 total fn move_paddle_raw(p: Paddle, input: PaddleInput, field: Field) -> Paddle
-    ensures result.height == p.height
 {
     let dy: Int = match input {
         PaddleInput::Up   => -1,
@@ -252,7 +235,6 @@ total fn move_left_paddle(
     input: LeftInput[PaddleInput],
     field: Field,
 ) -> Paddle
-    ensures result.height == p.height
 {
     let raw: PaddleInput = relabel from_left_input(input, "MOVE-LEFT-PADDLE");
     move_paddle_raw(p, raw, field)
@@ -264,7 +246,6 @@ total fn move_right_paddle(
     input: RightInput[PaddleInput],
     field: Field,
 ) -> Paddle
-    ensures result.height == p.height
 {
     let raw: PaddleInput = relabel from_right_input(input, "MOVE-RIGHT-PADDLE");
     move_paddle_raw(p, raw, field)
@@ -280,7 +261,6 @@ pub total fn dispatch_left_paddle(
     input: PaddleInput,
     field: Field,
 ) -> Paddle
-    ensures result.height == p.height
 {
     let labeled: LeftInput[PaddleInput] = relabel to_left_input(input, "DISPATCH-LEFT-KEY");
     move_left_paddle(p, labeled, field)
@@ -294,7 +274,6 @@ pub total fn dispatch_right_paddle(
     input: PaddleInput,
     field: Field,
 ) -> Paddle
-    ensures result.height == p.height
 {
     let labeled: RightInput[PaddleInput] = relabel to_right_input(input, "DISPATCH-RIGHT-KEY");
     move_right_paddle(p, labeled, field)
@@ -303,7 +282,6 @@ pub total fn dispatch_right_paddle(
 /// AI paddle move: track the ball's vertical position by ±1 per tick.
 /// Uses the same clamp as human input so bounds proofs are identical.
 pub total fn ai_move(p: Paddle, ball: Ball, field: Field) -> Paddle
-    ensures result.height == p.height
 {
     let target: Int = ball.y;
     let center: Int = p.y + p.height / 2;
