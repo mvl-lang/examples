@@ -47,7 +47,11 @@ smoke: install ## Smoke-test: build binary (proves compilation without a tty)
 
 # ── Run ────────────────────────────────────────────────────────────────────────
 
-run: install ## Play the game (requires a real TTY)
+run: install ## Play the game (requires a real TTY; audit events → /tmp/pong.log)
+	@echo "▶ audit events redirected to /tmp/pong.log"
+	@$(MVL) run $(MVL_FLAGS) $(DIR)main.mvl -- $(ARGS) 2>/tmp/pong.log
+
+run-verbose: install ## Play with audit events on stderr (may clutter the TUI)
 	$(MVL) run $(MVL_FLAGS) $(DIR)main.mvl -- $(ARGS)
 
 # ── Code Quality ───────────────────────────────────────────────────────────────
