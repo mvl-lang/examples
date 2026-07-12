@@ -436,7 +436,7 @@ partial fn main() -> Unit ! AppIO {
     let auditor: AuditLogger = file_audit_logger(path(cfg.audit_path));
     let tracer: Tracer = default_tracer();
     match auditor.emit(modify("system", "service", "start").with_details({"instance_id": boot_ctx.trace_id, "app": m.app_name, "version": m.app_version, "packages": format_packages(m.packages)})) {
-        Err(e) => logger.warn("audit.startup", {"error": e}),
+        Err(e) => logger.warn("audit.startup", {"error": e.user_message()}),
         Ok(_) => { },
     }
     logger.info("server", {"host": cfg.host, "port": cfg.port.to_string()});
