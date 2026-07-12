@@ -1,0 +1,584 @@
+// game_test.mvl — Unit tests for pure game logic.
+//
+// Exercises physics, bouncing, AI, scoring, and win detection without a
+// terminal.  Every test uses local re-declarations of the game.mvl fns
+// because the per-file test checker doesn't resolve cross-module `use`
+// yet (#96 — same convention as crud_api / snake_game).
+//
+// The tests re-implement the fns being tested.  In practice this doubles
+// as an executable spec: if game.mvl and the test file diverge, the
+// mismatch shows up at review — the ~30 contract obligations in
+// requirements.md §7 are what really pin down correctness.
+//
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations ──────────────────────────────────────────────────────
+
+type Field = struct {
+    width:  Int where self >= 20 && self <= 120,
+    height: Int where self >= 10 && self <= 40,
+}
+
+type Ball = struct {
+    x:  Int where self >= 0 && self <= 120,
+    y:  Int where self >= 0 && self <= 40,
+    vx: Int where self >= -3 && self <= 3 && self != 0,
+    vy: Int where self >= -1 && self <= 1,
+}
+
+type Paddle = struct {
+    y:      Int where self >= 0 && self <= 40,
+    height: Int where self >= 2 && self <= 8,
+} with invariant self.y + self.height <= 40
+
+type Mode = enum { SinglePlayer, TwoPlayer }
+type Palette = enum { BlackWhite, Color }
+type Difficulty = enum { Simple, Medium, Hard }
+type Side = enum { Left, Right }
+type GameStatus = enum { Playing, Won(Side) }
+type PaddleInput = enum { Up, Down }
+
+type Game = struct {
+    field:         Field,
+    ball:          Ball,
+    left_paddle:   Paddle,
+    right_paddle:  Paddle,
+    left_score:    Int where self >= 0 && self <= 11,
+    right_score:   Int where self >= 0 && self <= 11,
+    rally_bounces: Int where self >= 0 && self <= 1000,
+    mode:          Mode,
+    difficulty:    Difficulty,
+    status:        GameStatus,
+}
+
+// ── Constants (mirror game.mvl) ──────────────────────────────────────────────
+
+total fn paddle_height() -> Int { 4 }
+total fn medium_speedup_after() -> Int { 3 }
+total fn max_speed() -> Int { 3 }
+
+// ── Helper: build a standard field ────────────────────────────────────────────
+
+total fn std_field() -> Field {
+    Field { width: 80, height: 24 }
+}
+
+total fn centered_paddle(field: Field) -> Paddle {
+    let ph: Int = paddle_height();
+    let y: Int = (field.height - ph) / 2;
+    let clamped: Int = if y < 0 {
+        0
+    } else if y + ph > field.height {
+        field.height - ph
+    } else {
+        y
+    };
+    Paddle { y: clamped, height: ph }
+}
+
+// ── Function re-declarations (mirror game.mvl) ───────────────────────────────
+
+total fn serve_ball(field: Field, serve_to: Side) -> Ball {
+    let vx: Int = match serve_to {
+        Side::Right => 1,
+        Side::Left  => -1,
+    };
+    Ball {
+        x: field.width / 2,
+        y: field.height / 2,
+        vx: vx,
+        vy: 0,
+    }
+}
+
+total fn clamp_row(y: Int, field: Field) -> Int {
+    if y < 0 {
+        0
+    } else if y >= field.height {
+        field.height - 1
+    } else {
+        y
+    }
+}
+
+total fn clamp_col(x: Int, field: Field) -> Int {
+    if x < 0 {
+        0
+    } else if x >= field.width {
+        field.width - 1
+    } else {
+        x
+    }
+}
+
+total fn step_ball(ball: Ball, field: Field) -> Ball {
+    Ball {
+        x:  clamp_col(ball.x + ball.vx, field),
+        y:  clamp_row(ball.y + ball.vy, field),
+        vx: ball.vx,
+        vy: ball.vy,
+    }
+}
+
+total fn at_wall(ball: Ball, field: Field) -> Bool {
+    ball.y <= 0 || ball.y >= field.height - 1
+}
+
+total fn bounce_wall(ball: Ball, field: Field) -> Ball {
+    let flipped: Int = if at_wall(ball, field) { 0 - ball.vy } else { ball.vy };
+    Ball {
+        x:  ball.x,
+        y:  ball.y,
+        vx: ball.vx,
+        vy: flipped,
+    }
+}
+
+total fn bounce_paddle(ball: Ball) -> Ball {
+    Ball {
+        x:  ball.x,
+        y:  ball.y,
+        vx: 0 - ball.vx,
+        vy: ball.vy,
+    }
+}
+
+total fn speed_step_up(ball: Ball, difficulty: Difficulty, bounces: Int) -> Ball {
+    let bumped: Bool = match difficulty {
+        Difficulty::Simple => false,
+        Difficulty::Medium => bounces > 0 && (bounces % medium_speedup_after()) == 0,
+        Difficulty::Hard   => false,
+    };
+    let new_vx: Int = if bumped {
+        let mag: Int = if ball.vx < 0 { 0 - ball.vx } else { ball.vx };
+        let new_mag: Int = if mag < max_speed() { mag + 1 } else { max_speed() };
+        if ball.vx < 0 { 0 - new_mag } else { new_mag }
+    } else {
+        ball.vx
+    };
+    Ball {
+        x:  ball.x,
+        y:  ball.y,
+        vx: new_vx,
+        vy: ball.vy,
+    }
+}
+
+total fn clamp_paddle_y(y: Int, height: Int, field: Field) -> Int {
+    if y < 0 {
+        0
+    } else if y + height > field.height {
+        field.height - height
+    } else {
+        y
+    }
+}
+
+total fn move_paddle_raw(p: Paddle, input: PaddleInput, field: Field) -> Paddle {
+    let dy: Int = match input {
+        PaddleInput::Up   => -1,
+        PaddleInput::Down => 1,
+    };
+    Paddle {
+        y:      clamp_paddle_y(p.y + dy, p.height, field),
+        height: p.height,
+    }
+}
+
+total fn ai_move(p: Paddle, ball: Ball, field: Field) -> Paddle {
+    let target: Int = ball.y;
+    let center: Int = p.y + p.height / 2;
+    let raw: PaddleInput = if target < center {
+        PaddleInput::Up
+    } else {
+        PaddleInput::Down
+    };
+    move_paddle_raw(p, raw, field)
+}
+
+total fn crossed_left(ball: Ball) -> Bool {
+    ball.x <= 0 && ball.vx < 0
+}
+
+total fn crossed_right(ball: Ball, field: Field) -> Bool {
+    ball.x >= field.width - 1 && ball.vx > 0
+}
+
+total fn resolve_scoring(game: Game) -> Game {
+    if crossed_left(game.ball) {
+        let new_score: Int = if game.right_score < 11 {
+            game.right_score + 1
+        } else {
+            game.right_score
+        };
+        Game {
+            field:         game.field,
+            ball:          serve_ball(game.field, Side::Left),
+            left_paddle:   game.left_paddle,
+            right_paddle:  game.right_paddle,
+            left_score:    game.left_score,
+            right_score:   new_score,
+            rally_bounces: 0,
+            mode:          game.mode,
+            difficulty:    game.difficulty,
+            status:        game.status,
+        }
+    } else if crossed_right(game.ball, game.field) {
+        let new_score: Int = if game.left_score < 11 {
+            game.left_score + 1
+        } else {
+            game.left_score
+        };
+        Game {
+            field:         game.field,
+            ball:          serve_ball(game.field, Side::Right),
+            left_paddle:   game.left_paddle,
+            right_paddle:  game.right_paddle,
+            left_score:    new_score,
+            right_score:   game.right_score,
+            rally_bounces: 0,
+            mode:          game.mode,
+            difficulty:    game.difficulty,
+            status:        game.status,
+        }
+    } else {
+        game
+    }
+}
+
+total fn check_win(game: Game, winning_score: Int) -> GameStatus {
+    if game.left_score >= winning_score {
+        GameStatus::Won(Side::Left)
+    } else if game.right_score >= winning_score {
+        GameStatus::Won(Side::Right)
+    } else {
+        GameStatus::Playing
+    }
+}
+
+total fn new_game(field: Field, mode: Mode, difficulty: Difficulty) -> Game {
+    Game {
+        field:         field,
+        ball:          serve_ball(field, Side::Right),
+        left_paddle:   centered_paddle(field),
+        right_paddle:  centered_paddle(field),
+        left_score:    0,
+        right_score:   0,
+        rally_bounces: 0,
+        mode:          mode,
+        difficulty:    difficulty,
+        status:        GameStatus::Playing,
+    }
+}
+
+// ── Tests: new_game ───────────────────────────────────────────────────────────
+
+test fn test_new_game_scores_zero() -> Unit {
+    let g: Game = new_game(std_field(), Mode::SinglePlayer, Difficulty::Simple);
+    assert_eq(g.left_score, 0);
+    assert_eq(g.right_score, 0);
+    assert_eq(g.rally_bounces, 0);
+}
+
+test fn test_new_game_ball_centered() -> Unit {
+    let g: Game = new_game(std_field(), Mode::SinglePlayer, Difficulty::Simple);
+    assert_eq(g.ball.x, 40);
+    assert_eq(g.ball.y, 12);
+    assert_eq(g.ball.vy, 0);
+}
+
+test fn test_new_game_serves_right() -> Unit {
+    let g: Game = new_game(std_field(), Mode::TwoPlayer, Difficulty::Hard);
+    assert_eq(g.ball.vx, 1);
+}
+
+test fn test_new_game_mode_preserved() -> Unit {
+    let g: Game = new_game(std_field(), Mode::TwoPlayer, Difficulty::Medium);
+    match g.mode {
+        Mode::TwoPlayer    => (),
+        Mode::SinglePlayer => assert_eq(1, 0),
+    }
+}
+
+// ── Tests: step_ball ──────────────────────────────────────────────────────────
+
+test fn test_step_ball_moves_by_velocity() -> Unit {
+    let f: Field = std_field();
+    let b: Ball = Ball { x: 20, y: 10, vx: 2, vy: 1 };
+    let stepped: Ball = step_ball(b, f);
+    assert_eq(stepped.x, 22);
+    assert_eq(stepped.y, 11);
+    assert_eq(stepped.vx, 2);
+    assert_eq(stepped.vy, 1);
+}
+
+test fn test_step_ball_clamps_at_top() -> Unit {
+    let f: Field = std_field();
+    let b: Ball = Ball { x: 20, y: 0, vx: 1, vy: -1 };
+    let stepped: Ball = step_ball(b, f);
+    assert_eq(stepped.y, 0);
+}
+
+test fn test_step_ball_clamps_at_bottom() -> Unit {
+    let f: Field = std_field();
+    let b: Ball = Ball { x: 20, y: 23, vx: 1, vy: 1 };
+    let stepped: Ball = step_ball(b, f);
+    assert_eq(stepped.y, 23);
+}
+
+// ── Tests: bounce_wall ────────────────────────────────────────────────────────
+
+test fn test_bounce_wall_top_flips_vy() -> Unit {
+    let f: Field = std_field();
+    let b: Ball = Ball { x: 40, y: 0, vx: 1, vy: -1 };
+    let bounced: Ball = bounce_wall(b, f);
+    assert_eq(bounced.vy, 1);
+    assert_eq(bounced.vx, 1);
+}
+
+test fn test_bounce_wall_bottom_flips_vy() -> Unit {
+    let f: Field = std_field();
+    let b: Ball = Ball { x: 40, y: 23, vx: 1, vy: 1 };
+    let bounced: Ball = bounce_wall(b, f);
+    assert_eq(bounced.vy, -1);
+}
+
+test fn test_bounce_wall_middle_no_change() -> Unit {
+    let f: Field = std_field();
+    let b: Ball = Ball { x: 40, y: 12, vx: 1, vy: 1 };
+    let bounced: Ball = bounce_wall(b, f);
+    assert_eq(bounced.vy, 1);
+    assert_eq(bounced.vx, 1);
+}
+
+// ── Tests: bounce_paddle ──────────────────────────────────────────────────────
+
+test fn test_bounce_paddle_flips_vx() -> Unit {
+    let b: Ball = Ball { x: 3, y: 10, vx: -1, vy: 0 };
+    let bounced: Ball = bounce_paddle(b);
+    assert_eq(bounced.vx, 1);
+    assert_eq(bounced.vy, 0);
+    assert_eq(bounced.y, 10);
+}
+
+test fn test_bounce_paddle_preserves_magnitude() -> Unit {
+    let b: Ball = Ball { x: 40, y: 10, vx: 3, vy: 1 };
+    let bounced: Ball = bounce_paddle(b);
+    assert_eq(bounced.vx, -3);
+    assert_eq(bounced.vy, 1);
+}
+
+// ── Tests: speed_step_up ──────────────────────────────────────────────────────
+
+test fn test_speed_simple_never_bumps() -> Unit {
+    let b: Ball = Ball { x: 40, y: 10, vx: 1, vy: 0 };
+    let after: Ball = speed_step_up(b, Difficulty::Simple, 999);
+    assert_eq(after.vx, 1);
+}
+
+test fn test_speed_medium_bumps_after_three() -> Unit {
+    let b: Ball = Ball { x: 40, y: 10, vx: 1, vy: 0 };
+    let after: Ball = speed_step_up(b, Difficulty::Medium, 3);
+    assert_eq(after.vx, 2);
+}
+
+test fn test_speed_medium_no_bump_before_three() -> Unit {
+    let b: Ball = Ball { x: 40, y: 10, vx: 1, vy: 0 };
+    let after: Ball = speed_step_up(b, Difficulty::Medium, 2);
+    assert_eq(after.vx, 1);
+}
+
+test fn test_speed_medium_caps_at_max() -> Unit {
+    let b: Ball = Ball { x: 40, y: 10, vx: 3, vy: 0 };
+    let after: Ball = speed_step_up(b, Difficulty::Medium, 3);
+    assert_eq(after.vx, 3);
+}
+
+test fn test_speed_medium_negative_direction_preserved() -> Unit {
+    let b: Ball = Ball { x: 40, y: 10, vx: -1, vy: 0 };
+    let after: Ball = speed_step_up(b, Difficulty::Medium, 3);
+    assert_eq(after.vx, -2);
+}
+
+// ── Tests: move_paddle_raw ────────────────────────────────────────────────────
+
+test fn test_move_paddle_up() -> Unit {
+    let f: Field = std_field();
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let moved: Paddle = move_paddle_raw(p, PaddleInput::Up, f);
+    assert_eq(moved.y, 9);
+    assert_eq(moved.height, 4);
+}
+
+test fn test_move_paddle_down() -> Unit {
+    let f: Field = std_field();
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let moved: Paddle = move_paddle_raw(p, PaddleInput::Down, f);
+    assert_eq(moved.y, 11);
+}
+
+test fn test_move_paddle_clamped_at_top() -> Unit {
+    let f: Field = std_field();
+    let p: Paddle = Paddle { y: 0, height: 4 };
+    let moved: Paddle = move_paddle_raw(p, PaddleInput::Up, f);
+    assert_eq(moved.y, 0);
+}
+
+test fn test_move_paddle_clamped_at_bottom() -> Unit {
+    let f: Field = std_field();
+    let p: Paddle = Paddle { y: 20, height: 4 };
+    let moved: Paddle = move_paddle_raw(p, PaddleInput::Down, f);
+    assert_eq(moved.y, 20);
+}
+
+// ── Tests: ai_move ────────────────────────────────────────────────────────────
+
+test fn test_ai_tracks_ball_up() -> Unit {
+    let f: Field = std_field();
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let ball: Ball = Ball { x: 40, y: 4, vx: 1, vy: 0 };
+    let moved: Paddle = ai_move(p, ball, f);
+    assert_eq(moved.y, 9);
+}
+
+test fn test_ai_tracks_ball_down() -> Unit {
+    let f: Field = std_field();
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let ball: Ball = Ball { x: 40, y: 20, vx: 1, vy: 0 };
+    let moved: Paddle = ai_move(p, ball, f);
+    assert_eq(moved.y, 11);
+}
+
+// ── Tests: scoring ────────────────────────────────────────────────────────────
+
+test fn test_resolve_scoring_right_awards_point_to_left() -> Unit {
+    let f: Field = std_field();
+    let g: Game = Game {
+        field: f,
+        ball: Ball { x: 79, y: 12, vx: 1, vy: 0 },
+        left_paddle: centered_paddle(f),
+        right_paddle: centered_paddle(f),
+        left_score: 3,
+        right_score: 5,
+        rally_bounces: 7,
+        mode: Mode::SinglePlayer,
+        difficulty: Difficulty::Simple,
+        status: GameStatus::Playing,
+    };
+    let after: Game = resolve_scoring(g);
+    assert_eq(after.left_score, 4);
+    assert_eq(after.right_score, 5);
+    assert_eq(after.rally_bounces, 0);
+}
+
+test fn test_resolve_scoring_left_awards_point_to_right() -> Unit {
+    let f: Field = std_field();
+    let g: Game = Game {
+        field: f,
+        ball: Ball { x: 0, y: 12, vx: -1, vy: 0 },
+        left_paddle: centered_paddle(f),
+        right_paddle: centered_paddle(f),
+        left_score: 3,
+        right_score: 5,
+        rally_bounces: 7,
+        mode: Mode::SinglePlayer,
+        difficulty: Difficulty::Simple,
+        status: GameStatus::Playing,
+    };
+    let after: Game = resolve_scoring(g);
+    assert_eq(after.left_score, 3);
+    assert_eq(after.right_score, 6);
+}
+
+test fn test_resolve_scoring_resets_ball_to_center() -> Unit {
+    let f: Field = std_field();
+    let g: Game = Game {
+        field: f,
+        ball: Ball { x: 79, y: 5, vx: 1, vy: 1 },
+        left_paddle: centered_paddle(f),
+        right_paddle: centered_paddle(f),
+        left_score: 0,
+        right_score: 0,
+        rally_bounces: 0,
+        mode: Mode::SinglePlayer,
+        difficulty: Difficulty::Simple,
+        status: GameStatus::Playing,
+    };
+    let after: Game = resolve_scoring(g);
+    assert_eq(after.ball.x, 40);
+    assert_eq(after.ball.y, 12);
+}
+
+test fn test_resolve_scoring_no_op_mid_field() -> Unit {
+    let f: Field = std_field();
+    let g: Game = Game {
+        field: f,
+        ball: Ball { x: 40, y: 12, vx: 1, vy: 0 },
+        left_paddle: centered_paddle(f),
+        right_paddle: centered_paddle(f),
+        left_score: 3,
+        right_score: 5,
+        rally_bounces: 7,
+        mode: Mode::SinglePlayer,
+        difficulty: Difficulty::Simple,
+        status: GameStatus::Playing,
+    };
+    let after: Game = resolve_scoring(g);
+    assert_eq(after.left_score, 3);
+    assert_eq(after.right_score, 5);
+    assert_eq(after.rally_bounces, 7);
+}
+
+// ── Tests: check_win ──────────────────────────────────────────────────────────
+
+test fn test_check_win_playing() -> Unit {
+    let f: Field = std_field();
+    let g: Game = new_game(f, Mode::SinglePlayer, Difficulty::Simple);
+    match check_win(g, 11) {
+        GameStatus::Playing         => (),
+        GameStatus::Won(Side::Left)  => assert_eq(1, 0),
+        GameStatus::Won(Side::Right) => assert_eq(1, 0),
+    }
+}
+
+test fn test_check_win_left_wins() -> Unit {
+    let f: Field = std_field();
+    let base: Game = new_game(f, Mode::SinglePlayer, Difficulty::Simple);
+    let g: Game = Game {
+        field: base.field,
+        ball: base.ball,
+        left_paddle: base.left_paddle,
+        right_paddle: base.right_paddle,
+        left_score: 11,
+        right_score: 5,
+        rally_bounces: 0,
+        mode: base.mode,
+        difficulty: base.difficulty,
+        status: base.status,
+    };
+    match check_win(g, 11) {
+        GameStatus::Won(Side::Left) => (),
+        _                            => assert_eq(1, 0),
+    }
+}
+
+test fn test_check_win_right_wins() -> Unit {
+    let f: Field = std_field();
+    let base: Game = new_game(f, Mode::SinglePlayer, Difficulty::Simple);
+    let g: Game = Game {
+        field: base.field,
+        ball: base.ball,
+        left_paddle: base.left_paddle,
+        right_paddle: base.right_paddle,
+        left_score: 5,
+        right_score: 11,
+        rally_bounces: 0,
+        mode: base.mode,
+        difficulty: base.difficulty,
+        status: base.status,
+    };
+    match check_win(g, 11) {
+        GameStatus::Won(Side::Right) => (),
+        _                             => assert_eq(1, 0),
+    }
+}

@@ -6,7 +6,7 @@
 #   make run                         # Play the game (requires a real TTY)
 #   make check                       # Type-check + refinement bounds
 #   make prove                       # Discharge every requires/ensures via Z3
-#   make test-mvl                    # Unit tests
+#   make test-rust                   # Unit tests (Rust backend)
 #   make coverage                    # Branch coverage report
 #   make mcdc                        # MC/DC condition coverage report
 #   make assurance                   # 11-req ISPE-style assurance report
@@ -14,7 +14,7 @@
 
 .PHONY: help version install build run smoke
 .PHONY: fmt check lint prove
-.PHONY: test-mvl test-llvm coverage mcdc
+.PHONY: test-rust test-llvm coverage mcdc
 .PHONY: assurance assurance-verbose
 .PHONY: all clean
 
@@ -66,7 +66,7 @@ prove: install ## Prove per-call-site refinement layer breakdown
 
 # ── Testing ────────────────────────────────────────────────────────────────────
 
-test-mvl: install ## Run unit tests (models_test / game_test / input_test)
+test-rust: install ## Run unit tests (models_test / game_test / input_test)
 	$(MVL) test $(MVL_FLAGS) $(DIR)
 
 test-llvm: install ## Run tests via LLVM backend
@@ -88,7 +88,7 @@ assurance-verbose: install ## Generate verbose assurance report
 
 # ── Full quality gate ─────────────────────────────────────────────────────────
 
-all: check test-mvl coverage mcdc prove assurance ## Full CI-equivalent quality gate
+all: check test-rust coverage mcdc prove assurance ## Full CI-equivalent quality gate
 
 # ── Clean ──────────────────────────────────────────────────────────────────────
 

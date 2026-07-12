@@ -20,26 +20,16 @@
 //
 // Assurance note: 0 extern blocks.
 
-// ── Position aliases ──────────────────────────────────────────────────────────
-//
-// Positions are refined `Int`s bounded by the maximum renderable field.
-// Named aliases so the shared 120 / 40 bounds appear exactly once — Ball,
-// Paddle, and any game.mvl helper that returns a coordinate reuses them.
-
-/// A horizontal position (column) within the maximum renderable field.
-pub type FieldCol = Int where self >= 0 && self <= 120
-
-/// A vertical position (row) within the maximum renderable field.
-pub type FieldRow = Int where self >= 0 && self <= 40
-
 // ── Field ──────────────────────────────────────────────────────────────────────
 
 /// Playfield dimensions.  Runtime-queried from the terminal at startup then
 /// frozen for the rest of the session — the refinements bound the range and
 /// the prover discharges them at construction sites.
 ///
-/// The width/height bounds here are *sizes* (with a minimum for playability),
-/// not positions, so they don't share the FieldCol/FieldRow aliases.
+/// The width/height bounds (20..120, 10..40) are repeated on Ball.x/y and
+/// Paddle.y — inline rather than aliased because MVL's named refined types
+/// are nominal today (see mvl-lang/mvl#TBD).  Once refined-type widening
+/// works, extract `FieldCol`/`FieldRow` aliases so the constants live once.
 pub type Field = struct {
     width:  Int where self >= 20 && self <= 120,
     height: Int where self >= 10 && self <= 40,
@@ -56,8 +46,8 @@ pub type Field = struct {
 /// `vy` is a small angle — 0 (horizontal) or ±1.  Bounces off paddle
 /// corners may perturb it; a straight-line hit leaves it unchanged.
 pub type Ball = struct {
-    x:  FieldCol,
-    y:  FieldRow,
+    x:  Int where self >= 0 && self <= 120,
+    y:  Int where self >= 0 && self <= 40,
     vx: Int where self >= -3 && self <= 3 && self != 0,
     vy: Int where self >= -1 && self <= 1,
 }
@@ -70,7 +60,7 @@ pub type Ball = struct {
 /// combined with the per-field bounds proves the paddle always fits inside
 /// the maximum possible field — game.mvl narrows this to the current field.
 pub type Paddle = struct {
-    y:      FieldRow,
+    y:      Int where self >= 0 && self <= 40,
     height: Int where self >= 2 && self <= 8,
 } with invariant self.y + self.height <= 40
 
@@ -153,25 +143,10 @@ pub type Config = struct {
     winning_score: Int where self >= 1 && self <= 21,
 }
 
-// ── IFC labels (Req 11) ────────────────────────────────────────────────────────
+// ── IFC labels ────────────────────────────────────────────────────────────────
 //
-// Two audited labels partition paddle-move inputs by player side.  In
-// TwoPlayer mode the type system guarantees a left key can never move the
-// right paddle — see requirements.md §16 for the full design.
-//
-// The labels wrap `PaddleInput` values.  main.mvl performs the relabel
-// exactly once per key at the dispatch site, so `grep 'relabel to_left_input'`
-// and `grep 'relabel to_right_input'` find every player-attribution decision.
-
-/// Marks a `PaddleInput` as originating from the left player's keys (W/S).
-pub label LeftInput
-
-/// Marks a `PaddleInput` as originating from the right player's keys (↑/↓).
-pub label RightInput
-
-/// Audited: tag a sanitized `PaddleInput` as belonging to the left player.
-/// Every call site must supply an audit string identifying the key source.
-pub relabel to_left_input: _ -> LeftInput audit
-
-/// Audited: tag a sanitized `PaddleInput` as belonging to the right player.
-pub relabel to_right_input: _ -> RightInput audit
+// The LeftInput / RightInput labels live in game.mvl instead of here.
+// Reason: mvl-lang/mvl#1780 — cross-file `use` of a user label loses the
+// `[T]` type argument, so labels must be colocated with all their
+// wrap/unwrap sites.  Once #1780 lands, labels move here and the
+// wrap-site audit trail lives in main.mvl per requirements.md §16.
