@@ -470,3 +470,50 @@ These roll into the assurance report as a "Req 11 audit trail" section.
 - Manual smoke test: `make run` — menu appears, game plays, both palettes
   render correctly, all three difficulties behave differently, both
   single/two-player work.
+
+## 18. Implementation notes — deviations from the spec
+
+Four MVL compiler issues surfaced during implementation; three landed
+during the build, one remains open.  The shipped code carries these
+consequences:
+
+### `Tainted[Key]` at the pkg-tui boundary — deferred
+The design in §16.1 uses `Tainted[Key]` as the input.mvl signature.  In
+practice `pkg.tui.read_key` returns bare `Key` (pkg-tui does not model
+its output as tainted).  Introducing a `Tainted[Key]` wrapper in
+`input.mvl` would either require a bogus `relabel taint` at the caller
+site or a fork of pkg-tui.  Skipped for now — the `LeftInput` /
+`RightInput` labels below are the load-bearing IFC guarantee.
+
+### Labels colocated in `game.mvl` instead of `models.mvl`
+§16.2 places labels in `models.mvl`.  Compiler [#1780](https://github.com/mvl-lang/mvl/issues/1780)
+originally blocked cross-file label use entirely.  After it was fixed
+in 0.247.1, follow-up [#1784](https://github.com/mvl-lang/mvl/issues/1784)
+surfaced — a `let` with an explicit label-type annotation
+(`let x: LeftInput[T] = ...`) still mismatches the RHS type.  Since MVL
+requires explicit types on every `let`, labels stay colocated with
+their wrap/unwrap sites in `game.mvl`.
+
+The Req 11 guarantee is unchanged: passing a `RightInput[PaddleInput]`
+to `move_left_paddle` is a compile-time type error.
+
+### `FieldCol` / `FieldRow` position aliases — deferred
+§6 was tentatively rewritten to use two shared aliases for the position
+bounds.  Compiler [#1781](https://github.com/mvl-lang/mvl/issues/1781)
+fixed alias-widening at struct construction sites in 0.247.2, but
+comparison sites (`ball.y <= 0`) still require both sides to be the
+same nominal type.  Inline refinements kept — the 4-way duplication of
+`120`/`40` is documented at the type declarations.
+
+### `mvl mcdc` unavailable — issue #1789
+`make mcdc` fails with `error[E0433]: cannot find type Direction` — the
+mcdc instrumented harness doesn't wire in `pkg.tui` types the way
+`mvl test` does.  Filed as [#1789](https://github.com/mvl-lang/mvl/issues/1789).
+Every other Makefile target works (`make check`, `make prove`,
+`make test-rust`, `make coverage`, `make assurance`, `make all` minus
+mcdc).
+
+### `make all` behavior
+Because `mvl mcdc` is currently blocked (#1789), `make all` fails at
+the mcdc step.  All other targets pass individually.  Once #1789 is
+fixed, `make all` will be fully green.
