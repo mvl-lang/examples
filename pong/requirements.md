@@ -324,15 +324,14 @@ way because effect annotations propagate.
 
 - `Ball.vx` starts at `+1` on new game, `-1` on left-scores (serves toward
   the loser), `+1` on right-scores.
-- `Ball.vy` starts at a random bias in {-1, +1} on new-game — the ball
-  always serves at a slope, never dead-horizontal.  A horizontal serve
-  would never bounce off the top or bottom walls, which is both boring
-  and trivially returnable, so `vy = 0` is excluded on the initial serve.
-  This is the one place the game loop crosses the effect boundary:
-  main.mvl calls `random_angle()` (`! Random`) and hands the result to
-  game.mvl's pure `with_ball_angle(game, bias)` helper.  On subsequent
-  serves after a score, the ball resets to `vy = 0` in `resolve_scoring`
-  — a possible extension is to randomize each serve as well.
+- `Ball.vy` starts at a random bias in {-1, +1} on *every* serve — the
+  ball always serves at a slope, never dead-horizontal.  A horizontal
+  serve would never bounce off the top or bottom walls, which is both
+  boring and trivially returnable, so `vy = 0` is excluded.  main.mvl
+  calls `random_angle()` (`! Random`) and hands the result to game.mvl's
+  pure `with_ball_angle(game, bias)` helper — once at new-game, and once
+  more each time the game loop detects the score changed
+  (i.e. immediately after `resolve_scoring` reset the ball).
 - On paddle hit at the paddle's ends, `vy` may become `±1`; otherwise it's
   preserved.
 

@@ -291,7 +291,7 @@ partial fn game_loop(
     initial: Game,
     palette: Palette,
     winning_score: Int,
-) -> Outcome ! Terminal {
+) -> Outcome ! Terminal + Random {
     let game: ref Game = initial;
     while true {
         let _: Unit = render_frame(term, game, palette);
@@ -308,7 +308,10 @@ partial fn game_loop(
             GameStatus::Playing => (),
         }
 
-        let kr: Result[Option[Key], String] = read_key_timeout(term, 60);
+        // 120ms per tick — halved from the previous 60ms cadence.  Ball
+        // moves by (vx, vy) once per tick; halving the tick rate halves
+        // the on-screen ball and paddle speed.
+        let kr: Result[Option[Key], String] = read_key_timeout(term, 120);
         let key_opt: Option[Key] = match kr {
             Ok(o)  => o,
             Err(_) => None,
@@ -320,7 +323,16 @@ partial fn game_loop(
         if quit {
             return Outcome { quit: true, status: GameStatus::Playing };
         }
+        let prev_left:  Int = game.left_score;
+        let prev_right: Int = game.right_score;
         game = game_tick(game, key_opt);
+        // If someone just scored, `resolve_scoring` reset the ball to a
+        // horizontal serve — apply a fresh random angle so every serve
+        // (not just the first) starts on a slope.
+        if game.left_score > prev_left || game.right_score > prev_right {
+            let bias: Int = random_angle();
+            game = with_ball_angle(game, bias);
+        }
     }
     Outcome { quit: false, status: GameStatus::Playing }
 }
