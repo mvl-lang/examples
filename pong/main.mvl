@@ -133,6 +133,24 @@ partial fn draw_paddle_at(
     }
 }
 
+/// Erase a paddle by writing spaces over its cells.  Used before the
+/// paddle is redrawn at its new position — the only cells that change
+/// per tick are the row leaving and the row entering.
+partial fn erase_paddle_at(
+    term: val Terminal,
+    y: Int,
+    col: Int,
+    height: Int,
+    row_off: Int,
+) -> Unit ! Terminal {
+    if height <= 0 {
+        ()
+    } else {
+        let _: Unit = put(term, y + row_off + 1, col, " ", style());
+        erase_paddle_at(term, y + 1, col, height - 1, row_off)
+    }
+}
+
 /// Compute the top-left offset for the field so it centers in the
 /// current terminal.  row_off / col_off point at the row/col of the
 /// top-left border corner (`╔`).
@@ -145,7 +163,10 @@ partial fn frame_offsets(term: val Terminal, field: Field) -> TerminalSize ! Ter
     TerminalSize { rows: row_off, cols: col_off }
 }
 
-partial fn render_frame(term: val Terminal, game: Game, palette: Palette) -> Unit ! Terminal {
+/// Full-frame render: clear the terminal, draw the border + walls + score
+/// bar + paddles + ball.  Called ONCE at game start.  Subsequent frames
+/// use `render_delta` to avoid the whole-screen flicker of clear().
+partial fn render_full(term: val Terminal, game: Game, palette: Palette) -> Unit ! Terminal {
     let _: Unit = clear(term);
     let bs: Style = border_style(palette);
     let off: TerminalSize = frame_offsets(term, game.field);
@@ -157,42 +178,56 @@ partial fn render_frame(term: val Terminal, game: Game, palette: Palette) -> Uni
     let _: Unit = put(term, row_off, col_off, top, bs);
     let _: Unit = put(term, row_off + game.field.height + 1, col_off, bot, bs);
     let _: Unit = draw_walls(term, 0, game.field.height - 1, game.field.width, row_off, col_off, bs);
-
-    // Left paddle at column just inside left border
-    let _: Unit = draw_paddle_at(
-        term,
-        game.left_paddle.y,
-        col_off + 1,
-        game.left_paddle.height,
-        row_off,
-        left_paddle_style(palette),
-    );
-    // Right paddle at rightmost inside column
-    let _: Unit = draw_paddle_at(
-        term,
-        game.right_paddle.y,
-        col_off + game.field.width,
-        game.right_paddle.height,
-        row_off,
-        right_paddle_style(palette),
-    );
-
-    // Ball
-    let _: Unit = put(
-        term,
-        game.ball.y + row_off + 1,
-        game.ball.x + col_off + 1,
-        "●",
-        ball_style(palette),
-    );
-
-    // Score bar centered below the field
+    let _: Unit = draw_paddle_at(term, game.left_paddle.y,  col_off + 1,                 game.left_paddle.height,  row_off, left_paddle_style(palette));
+    let _: Unit = draw_paddle_at(term, game.right_paddle.y, col_off + game.field.width,  game.right_paddle.height, row_off, right_paddle_style(palette));
+    let _: Unit = put(term, game.ball.y + row_off + 1, game.ball.x + col_off + 1, "●", ball_style(palette));
     let score_line: String = "Left: "
         .concat(game.left_score.to_string())
         .concat("   Right: ")
         .concat(game.right_score.to_string())
         .concat("   (q or Esc to quit)");
     put(term, row_off + game.field.height + 2, col_off, score_line, score_style(palette))
+}
+
+/// Delta render: only touch the cells that changed between `prev` and
+/// `curr` — the old ball is erased, both paddles are erased-then-redrawn
+/// (they may have moved by ±1 row), the new ball is drawn, and the
+/// score bar is refreshed.  Border and walls are already on screen from
+/// the initial `render_full` and never need repainting.
+///
+/// This is what kills the flicker: no `clear()`, no border repaint —
+/// just ~30 cell writes per frame.
+partial fn render_delta(
+    term: val Terminal,
+    prev: Game,
+    curr: Game,
+    palette: Palette,
+) -> Unit ! Terminal {
+    let off: TerminalSize = frame_offsets(term, curr.field);
+    let row_off: Int = off.rows;
+    let col_off: Int = off.cols;
+
+    // Erase old ball
+    let _: Unit = put(term, prev.ball.y + row_off + 1, prev.ball.x + col_off + 1, " ", style());
+
+    // Erase + redraw left paddle
+    let _: Unit = erase_paddle_at(term, prev.left_paddle.y,  col_off + 1, prev.left_paddle.height,  row_off);
+    let _: Unit = draw_paddle_at(term,  curr.left_paddle.y,  col_off + 1, curr.left_paddle.height,  row_off, left_paddle_style(palette));
+
+    // Erase + redraw right paddle
+    let _: Unit = erase_paddle_at(term, prev.right_paddle.y, col_off + curr.field.width, prev.right_paddle.height, row_off);
+    let _: Unit = draw_paddle_at(term,  curr.right_paddle.y, col_off + curr.field.width, curr.right_paddle.height, row_off, right_paddle_style(palette));
+
+    // Draw new ball
+    let _: Unit = put(term, curr.ball.y + row_off + 1, curr.ball.x + col_off + 1, "●", ball_style(palette));
+
+    // Refresh score bar (cheap; only changes on a score)
+    let score_line: String = "Left: "
+        .concat(curr.left_score.to_string())
+        .concat("   Right: ")
+        .concat(curr.right_score.to_string())
+        .concat("   (q or Esc to quit)");
+    put(term, row_off + curr.field.height + 2, col_off, score_line, score_style(palette))
 }
 
 partial fn render_win(term: val Terminal, game: Game, side: Side) -> Unit ! Terminal {
@@ -314,11 +349,10 @@ partial fn game_loop(
     winning_score: Int,
 ) -> Outcome ! Terminal + Random {
     let game: ref Game = initial;
+    // Paint the full frame once — border, walls, paddles, ball, score.
+    let _: Unit = render_full(term, game, palette);
     while true {
-        let _: Unit = render_frame(term, game, palette);
-
-        // Check for a winner before reading input — a fresh scored game
-        // may already be at the winning threshold.
+        // Check for a winner before reading input.
         let status: GameStatus = check_win(game, winning_score);
         match status {
             GameStatus::Won(side) => {
@@ -329,9 +363,8 @@ partial fn game_loop(
             GameStatus::Playing => (),
         }
 
-        // 120ms per tick — halved from the previous 60ms cadence.  Ball
-        // moves by (vx, vy) once per tick; halving the tick rate halves
-        // the on-screen ball and paddle speed.
+        // 120ms per tick.  Ball moves once per tick — halving this
+        // rate halves the on-screen ball and paddle speed.
         let kr: Result[Option[Key], String] = read_key_timeout(term, 120);
         let key_opt: Option[Key] = match kr {
             Ok(o)  => o,
@@ -346,13 +379,17 @@ partial fn game_loop(
         }
         let prev_left:  Int = game.left_score;
         let prev_right: Int = game.right_score;
+        let prev_snapshot: Game = game;
         game = game_tick(game, key_opt);
-        // If someone just scored, `resolve_scoring` reset the ball to a
-        // horizontal serve — apply a fresh random angle so every serve
-        // (not just the first) starts on a slope.
+        // If someone just scored, apply a fresh random angle so every
+        // serve starts on a slope.
         if game.left_score > prev_left || game.right_score > prev_right {
             let bias: Int = random_angle();
             game = with_ball_angle(game, bias);
+            // A score means the whole board reset — repaint everything.
+            let _: Unit = render_full(term, game, palette);
+        } else {
+            let _: Unit = render_delta(term, prev_snapshot, game, palette);
         }
     }
     Outcome { quit: false, status: GameStatus::Playing }

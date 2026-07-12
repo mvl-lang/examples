@@ -380,7 +380,7 @@ pub total fn check_win(game: Game, winning_score: Int) -> GameStatus {
 pub total fn field_from_terminal(cols: Int, rows: Int) -> Field {
     let _: Int = cols;
     let _: Int = rows;
-    Field { width: 60, height: 20 }
+    Field { width: 80, height: 22 }
 }
 
 // ── New game ──────────────────────────────────────────────────────────────────
