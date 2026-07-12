@@ -406,6 +406,31 @@ total fn centered_paddle(field: Field) -> Paddle {
     }
 }
 
+/// Set the ball's vertical bias for a fresh serve.  main.mvl calls this
+/// with a random value in {-1, 0, 1} to give the serve an angle.
+pub total fn with_ball_angle(game: Game, vy_bias: Int) -> Game
+    requires vy_bias >= -1 && vy_bias <= 1
+{
+    let biased: Ball = Ball {
+        x:  game.ball.x,
+        y:  game.ball.y,
+        vx: game.ball.vx,
+        vy: vy_bias,
+    };
+    Game {
+        field:         game.field,
+        ball:          biased,
+        left_paddle:   game.left_paddle,
+        right_paddle:  game.right_paddle,
+        left_score:    game.left_score,
+        right_score:   game.right_score,
+        rally_bounces: game.rally_bounces,
+        mode:          game.mode,
+        difficulty:    game.difficulty,
+        status:        game.status,
+    }
+}
+
 /// Build a fresh Game.  Ball serves toward the RIGHT on new game.
 pub total fn new_game(field: Field, mode: Mode, difficulty: Difficulty) -> Game
     ensures result.left_score    == 0

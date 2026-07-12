@@ -33,7 +33,10 @@ use game::{
     at_wall, speed_step_up, ai_move, resolve_scoring, check_win,
     field_from_terminal, paddle_height,
     dispatch_left_paddle, dispatch_right_paddle,
+    with_ball_angle,
 }
+
+use std.random.{int}
 
 use input::{key_to_left_input, key_to_right_input, is_quit_key, is_commit_key}
 
@@ -368,6 +371,30 @@ total fn difficulty_label(d: Difficulty) -> String {
     }
 }
 
+partial fn horiz_line(n: Int, acc: String) -> String {
+    if n <= 0 {
+        acc
+    } else {
+        horiz_line(n - 1, acc.concat("═"))
+    }
+}
+
+partial fn draw_side_walls(
+    term: val Terminal,
+    row: Int,
+    max_row: Int,
+    right_col: Int,
+    s: Style,
+) -> Unit ! Terminal {
+    if row > max_row {
+        ()
+    } else {
+        let _: Unit = put(term, row, 1, "║", s);
+        let _: Unit = put(term, row, right_col, "║", s);
+        draw_side_walls(term, row + 1, max_row, right_col, s)
+    }
+}
+
 partial fn draw_menu(
     term: val Terminal,
     config: Config,
@@ -375,24 +402,47 @@ partial fn draw_menu(
 ) -> Unit ! Terminal {
     let _: Unit = clear(term);
     let s: Style = bold_style();
-    let _: Unit = put(term, 2, 8, "╔══════════════════════════════════╗", s);
-    let _: Unit = put(term, 3, 8, "║           M V L   P O N G        ║", s);
-    let _: Unit = put(term, 4, 8, "╠══════════════════════════════════╣", s);
-    let _: Unit = put(term, 5, 8, "║                                  ║", s);
+    let ts: TerminalSize = size(term);
+    // Box fills the whole terminal.  Top border at row 1, bottom at rows.
+    let inner: String = horiz_line(ts.cols - 2, "");
+    let top: String = "╔".concat(inner).concat("╗");
+    let bot: String = "╚".concat(inner).concat("╝");
+    let _: Unit = put(term, 1, 1, top, s);
+    let _: Unit = put(term, ts.rows, 1, bot, s);
+    let _: Unit = draw_side_walls(term, 2, ts.rows - 1, ts.cols, s);
+
+    // Centre the content vertically: nine text rows spanning
+    // (title, blank, mode, palette, difficulty, blank, controls×4, blank,
+    // menu-hint) = 13 rows.  Start row = (rows - 13) / 2 + 2.
+    let block_h: Int = 13;
+    let start_row: Int = (ts.rows - block_h) / 2 + 1;
+    let title_col: Int = (ts.cols - 15) / 2;
+    let opt_col:   Int = (ts.cols - 28) / 2;
+    let ctrl_col:  Int = (ts.cols - 30) / 2;
+    let hint_col:  Int = (ts.cols - 40) / 2;
+
+    let _: Unit = put(term, start_row, title_col, "M V L   P O N G", s);
+
     let mode_prefix:       String = if sel == 0 { "▶ " } else { "  " };
     let palette_prefix:    String = if sel == 1 { "▶ " } else { "  " };
     let difficulty_prefix: String = if sel == 2 { "▶ " } else { "  " };
-    let mode_line: String = mode_prefix
+    let mode_line:       String = mode_prefix
         .concat("Mode:       ").concat(mode_label(config.mode));
-    let palette_line: String = palette_prefix
+    let palette_line:    String = palette_prefix
         .concat("Palette:    ").concat(palette_label(config.palette));
     let difficulty_line: String = difficulty_prefix
         .concat("Difficulty: ").concat(difficulty_label(config.difficulty));
-    let _: Unit = put(term, 6,  10, mode_line, s);
-    let _: Unit = put(term, 7,  10, palette_line, s);
-    let _: Unit = put(term, 8,  10, difficulty_line, s);
-    let _: Unit = put(term, 10, 10, "↑↓ move · ← → cycle · ⏎ start · Esc quit", s);
-    put(term, 11, 8, "╚══════════════════════════════════╝", s)
+
+    let _: Unit = put(term, start_row + 2, opt_col, mode_line, s);
+    let _: Unit = put(term, start_row + 3, opt_col, palette_line, s);
+    let _: Unit = put(term, start_row + 4, opt_col, difficulty_line, s);
+
+    let _: Unit = put(term, start_row + 6, ctrl_col, "In-game controls:", s);
+    let _: Unit = put(term, start_row + 7, ctrl_col, "  W / S     — left paddle", s);
+    let _: Unit = put(term, start_row + 8, ctrl_col, "  ↑ / ↓     — right paddle", s);
+    let _: Unit = put(term, start_row + 9, ctrl_col, "  q / Esc   — quit", s);
+
+    put(term, start_row + 11, hint_col, "Menu:  ↑↓ move · ←→ cycle · ⏎ start", s)
 }
 
 total fn cycle_config_at(cfg: Config, sel: Int) -> Config {
@@ -607,13 +657,28 @@ partial fn trusted_args() -> List[String] ! Env {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
+/// Pick a random ball-serve angle: {-1, 0, +1}, biased slightly against 0
+/// so most serves have a visible angle.
+partial fn random_angle() -> Int ! Random {
+    // int(0, 3) → 0/1/2/3; map to -1, 0, +1, +1 (2/4 chance of +1, 1/4 each other)
+    let r: Int = int(0, 3);
+    if r == 0 {
+        -1
+    } else if r == 1 {
+        0
+    } else {
+        1
+    }
+}
+
 partial fn play(
     term: val Terminal,
     cfg: Config,
-) -> Bool ! Terminal {
+) -> Bool ! Terminal + Random {
     let ts: TerminalSize = size(term);
     let field: Field = field_from_terminal(ts.cols, ts.rows);
-    let g0: Game = new_game(field, cfg.mode, cfg.difficulty);
+    let bias: Int = random_angle();
+    let g0: Game = with_ball_angle(new_game(field, cfg.mode, cfg.difficulty), bias);
     let outcome: Outcome = game_loop(term, g0, cfg.palette, cfg.winning_score);
     outcome.quit
 }

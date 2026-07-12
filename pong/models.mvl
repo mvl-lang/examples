@@ -145,8 +145,7 @@ pub type Config = struct {
 
 // ── IFC labels ────────────────────────────────────────────────────────────────
 //
-// LeftInput / RightInput labels + relabels live in game.mvl.  The #1780 fix
-// makes function-parameter labels work cross-file, but a `let` binding with
-// an explicit label type annotation (`let x: LeftInput[T] = ...`) still
-// parses/checks against a different type representation.  Since all `let`s
-// in MVL require explicit types, labels stay colocated for now.
+// LeftInput / RightInput labels + relabels live in game.mvl.  The #1780/#1784
+// fixes improved cross-file label handling but the check still infers
+// `LeftInput[Paddle]` as the return type of a call to a plain-Paddle-returning
+// fn when the labeled arg crosses file boundaries.  Colocation avoids it.
