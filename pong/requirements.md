@@ -215,6 +215,11 @@ ensures result.width  >= 20 && result.width  <= 120
 ensures result.height >= 10 && result.height <= 40
 ```
 
+Note: today `field_from_terminal` returns a fixed `Field { 60, 20 }`
+regardless of terminal size — the terminal geometry only affects where
+the field is *drawn* (centered by `main.mvl::frame_offsets`), not the
+logical dimensions.  See §14 for rationale.
+
 **Total explicit `requires`/`ensures` contracts: ~30**, plus refinement
 discharges at every literal / construction site.
 
@@ -334,6 +339,20 @@ way because effect annotations propagate.
   (i.e. immediately after `resolve_scoring` reset the ball).
 - On paddle hit at the paddle's ends, `vy` may become `±1`; otherwise it's
   preserved.
+
+## 14a. Field dimensions — fixed 60×20, centered on terminal
+
+The logical playfield is a fixed **60 columns × 20 rows** (well within the
+refined `[20..120] × [10..40]` bounds).  The rendering code queries
+`pkg.tui.size(term)` each frame and centers the field inside the
+available terminal area.
+
+Rationale: at 60 columns wide, a single ball step (`vx = 1`) is ~1.7%
+of the field width — visible and easy to track.  Filling the whole
+terminal (say 200 columns) with the game grid made a single step
+imperceptible.  60×20 also matches the ballpark aspect of the original
+arcade Pong (~1.85:1 in the field-to-ball ratio; ours is 3:1 in cells
+but 6:2 in monospace-corrected units, roughly 1.5:1).
 
 ## 14. Rendering
 
