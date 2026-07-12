@@ -30,7 +30,7 @@ use models::{
 
 use game::{
     new_game, serve_ball, step_ball, bounce_wall, bounce_paddle,
-    at_wall, speed_step_up, ai_move, resolve_scoring, check_win,
+    at_wall, speed_step_up, bump_ball_speed, ai_move, resolve_scoring, check_win,
     field_from_terminal, paddle_height,
     dispatch_left_paddle, dispatch_right_paddle,
     with_ball_angle,
@@ -382,10 +382,31 @@ partial fn game_loop(
         let prev_snapshot: Game = game;
         game = game_tick(game, key_opt);
         // If someone just scored, apply a fresh random angle so every
-        // serve starts on a slope.
+        // serve starts on a slope.  Also bump ball speed on Hard mode —
+        // Hard accelerates once per point, capped at max_speed().
         if game.left_score > prev_left || game.right_score > prev_right {
             let bias: Int = random_angle();
             game = with_ball_angle(game, bias);
+            let is_hard: Bool = match game.difficulty {
+                Difficulty::Hard   => true,
+                Difficulty::Simple => false,
+                Difficulty::Medium => false,
+            };
+            if is_hard {
+                let bumped_ball: Ball = bump_ball_speed(game.ball);
+                game = Game {
+                    field:         game.field,
+                    ball:          bumped_ball,
+                    left_paddle:   game.left_paddle,
+                    right_paddle:  game.right_paddle,
+                    left_score:    game.left_score,
+                    right_score:   game.right_score,
+                    rally_bounces: game.rally_bounces,
+                    mode:          game.mode,
+                    difficulty:    game.difficulty,
+                    status:        game.status,
+                };
+            }
             // A score means the whole board reset — repaint everything.
             let _: Unit = render_full(term, game, palette);
         } else {

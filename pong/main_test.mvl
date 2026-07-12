@@ -1,0 +1,330 @@
+// main_test.mvl — Unit tests for the pure fns declared in main.mvl.
+//
+// main.mvl is the only file with effects, but many of its fns are pure
+// (menu logic, CLI parse, collision detection).  This file exercises
+// those under the same test-isolation convention as game_test /
+// input_test — re-declaring the fns locally (#96).
+//
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations ─────────────────────────────────────────────────────
+
+type Field = struct {
+    width:  Int where self >= 20 && self <= 120,
+    height: Int where self >= 10 && self <= 40,
+}
+
+type Ball = struct {
+    x:  Int where self >= 0 && self <= 120,
+    y:  Int where self >= 0 && self <= 40,
+    vx: Int where self >= -3 && self <= 3 && self != 0,
+    vy: Int where self >= -1 && self <= 1,
+}
+
+type Paddle = struct {
+    y:      Int where self >= 0 && self <= 40,
+    height: Int where self >= 2 && self <= 8,
+} with invariant self.y + self.height <= 40
+
+type Mode       = enum { SinglePlayer, TwoPlayer }
+type Palette    = enum { BlackWhite, Color }
+type Difficulty = enum { Simple, Medium, Hard }
+type Side       = enum { Left, Right }
+
+type Config = struct {
+    mode:          Mode,
+    palette:       Palette,
+    difficulty:    Difficulty,
+    winning_score: Int where self >= 1 && self <= 21,
+}
+
+// Menu action + navigation cycles
+
+type MenuAction = enum { NavUp, NavDown, Cycle, Commit, Cancel, Ignore }
+
+total fn cycle_mode(m: Mode) -> Mode {
+    match m {
+        Mode::SinglePlayer => Mode::TwoPlayer,
+        Mode::TwoPlayer    => Mode::SinglePlayer,
+    }
+}
+
+total fn cycle_palette(p: Palette) -> Palette {
+    match p {
+        Palette::BlackWhite => Palette::Color,
+        Palette::Color      => Palette::BlackWhite,
+    }
+}
+
+total fn cycle_difficulty(d: Difficulty) -> Difficulty {
+    match d {
+        Difficulty::Simple => Difficulty::Medium,
+        Difficulty::Medium => Difficulty::Hard,
+        Difficulty::Hard   => Difficulty::Simple,
+    }
+}
+
+total fn cycle_config_at(cfg: Config, sel: Int) -> Config {
+    if sel == 0 {
+        Config { mode: cycle_mode(cfg.mode), palette: cfg.palette, difficulty: cfg.difficulty, winning_score: cfg.winning_score }
+    } else if sel == 1 {
+        Config { mode: cfg.mode, palette: cycle_palette(cfg.palette), difficulty: cfg.difficulty, winning_score: cfg.winning_score }
+    } else {
+        Config { mode: cfg.mode, palette: cfg.palette, difficulty: cycle_difficulty(cfg.difficulty), winning_score: cfg.winning_score }
+    }
+}
+
+// CLI arg parsing
+
+total fn parse_mode(s: String) -> Option[Mode] {
+    if s == "single" || s == "s" { Some(Mode::SinglePlayer) }
+    else if s == "two" || s == "2" { Some(Mode::TwoPlayer) }
+    else { None }
+}
+
+total fn parse_palette(s: String) -> Option[Palette] {
+    if s == "bw" || s == "mono" { Some(Palette::BlackWhite) }
+    else if s == "color" { Some(Palette::Color) }
+    else { None }
+}
+
+total fn parse_difficulty(s: String) -> Option[Difficulty] {
+    if s == "simple" { Some(Difficulty::Simple) }
+    else if s == "medium" { Some(Difficulty::Medium) }
+    else if s == "hard" { Some(Difficulty::Hard) }
+    else { None }
+}
+
+// Collision predicates
+
+total fn hits_left_paddle(ball: Ball, paddle: Paddle) -> Bool {
+    ball.x <= 1
+        && ball.vx < 0
+        && ball.y >= paddle.y
+        && ball.y < paddle.y + paddle.height
+}
+
+total fn hits_right_paddle(ball: Ball, paddle: Paddle, field: Field) -> Bool {
+    ball.x >= field.width - 2
+        && ball.vx > 0
+        && ball.y >= paddle.y
+        && ball.y < paddle.y + paddle.height
+}
+
+// Helpers
+
+total fn is_some_mode(o: Option[Mode], want: Mode) -> Bool {
+    match o {
+        Some(m) => match m {
+            Mode::SinglePlayer => match want {
+                Mode::SinglePlayer => true,
+                Mode::TwoPlayer    => false,
+            },
+            Mode::TwoPlayer => match want {
+                Mode::SinglePlayer => false,
+                Mode::TwoPlayer    => true,
+            },
+        },
+        None => false,
+    }
+}
+
+total fn is_some_pal(o: Option[Palette], want: Palette) -> Bool {
+    match o {
+        Some(p) => match p {
+            Palette::BlackWhite => match want { Palette::BlackWhite => true, Palette::Color => false },
+            Palette::Color      => match want { Palette::BlackWhite => false, Palette::Color => true  },
+        },
+        None => false,
+    }
+}
+
+total fn is_some_diff(o: Option[Difficulty], want: Difficulty) -> Bool {
+    match o {
+        Some(d) => match d {
+            Difficulty::Simple => match want { Difficulty::Simple => true, Difficulty::Medium => false, Difficulty::Hard => false },
+            Difficulty::Medium => match want { Difficulty::Simple => false, Difficulty::Medium => true, Difficulty::Hard => false },
+            Difficulty::Hard   => match want { Difficulty::Simple => false, Difficulty::Medium => false, Difficulty::Hard => true  },
+        },
+        None => false,
+    }
+}
+
+total fn opt_is_none_mode(o: Option[Mode]) -> Bool {
+    match o { Some(_) => false, None => true }
+}
+total fn opt_is_none_pal(o: Option[Palette]) -> Bool {
+    match o { Some(_) => false, None => true }
+}
+total fn opt_is_none_diff(o: Option[Difficulty]) -> Bool {
+    match o { Some(_) => false, None => true }
+}
+
+// ── Tests: cycle_* ───────────────────────────────────────────────────────────
+
+test fn test_cycle_mode_single_to_two() -> Unit {
+    match cycle_mode(Mode::SinglePlayer) {
+        Mode::TwoPlayer    => (),
+        Mode::SinglePlayer => assert_eq(1, 0),
+    }
+}
+test fn test_cycle_mode_two_to_single() -> Unit {
+    match cycle_mode(Mode::TwoPlayer) {
+        Mode::SinglePlayer => (),
+        Mode::TwoPlayer    => assert_eq(1, 0),
+    }
+}
+test fn test_cycle_palette_bw_to_color() -> Unit {
+    match cycle_palette(Palette::BlackWhite) {
+        Palette::Color      => (),
+        Palette::BlackWhite => assert_eq(1, 0),
+    }
+}
+test fn test_cycle_palette_color_to_bw() -> Unit {
+    match cycle_palette(Palette::Color) {
+        Palette::BlackWhite => (),
+        Palette::Color      => assert_eq(1, 0),
+    }
+}
+test fn test_cycle_difficulty_simple_medium() -> Unit {
+    match cycle_difficulty(Difficulty::Simple) {
+        Difficulty::Medium => (),
+        _                  => assert_eq(1, 0),
+    }
+}
+test fn test_cycle_difficulty_medium_hard() -> Unit {
+    match cycle_difficulty(Difficulty::Medium) {
+        Difficulty::Hard => (),
+        _                => assert_eq(1, 0),
+    }
+}
+test fn test_cycle_difficulty_hard_simple() -> Unit {
+    match cycle_difficulty(Difficulty::Hard) {
+        Difficulty::Simple => (),
+        _                  => assert_eq(1, 0),
+    }
+}
+
+// ── Tests: cycle_config_at ───────────────────────────────────────────────────
+
+test fn test_cycle_config_at_row_0_cycles_mode() -> Unit {
+    let c0: Config = Config {
+        mode: Mode::SinglePlayer, palette: Palette::Color, difficulty: Difficulty::Medium, winning_score: 11,
+    };
+    let c1: Config = cycle_config_at(c0, 0);
+    match c1.mode {
+        Mode::TwoPlayer    => (),
+        Mode::SinglePlayer => assert_eq(1, 0),
+    }
+    // Other fields unchanged
+    let _: Unit = match c1.palette { Palette::Color => (), Palette::BlackWhite => assert_eq(1, 0) };
+    let _: Unit = match c1.difficulty { Difficulty::Medium => (), _ => assert_eq(1, 0) };
+}
+
+test fn test_cycle_config_at_row_1_cycles_palette() -> Unit {
+    let c0: Config = Config {
+        mode: Mode::SinglePlayer, palette: Palette::BlackWhite, difficulty: Difficulty::Simple, winning_score: 11,
+    };
+    let c1: Config = cycle_config_at(c0, 1);
+    let _: Unit = match c1.palette { Palette::Color => (), Palette::BlackWhite => assert_eq(1, 0) };
+    let _: Unit = match c1.mode { Mode::SinglePlayer => (), Mode::TwoPlayer => assert_eq(1, 0) };
+}
+
+test fn test_cycle_config_at_row_2_cycles_difficulty() -> Unit {
+    let c0: Config = Config {
+        mode: Mode::TwoPlayer, palette: Palette::Color, difficulty: Difficulty::Simple, winning_score: 11,
+    };
+    let c1: Config = cycle_config_at(c0, 2);
+    let _: Unit = match c1.difficulty { Difficulty::Medium => (), _ => assert_eq(1, 0) };
+    let _: Unit = match c1.mode { Mode::TwoPlayer => (), Mode::SinglePlayer => assert_eq(1, 0) };
+}
+
+// ── Tests: parse_mode ────────────────────────────────────────────────────────
+
+test fn test_parse_mode_single() -> Unit {
+    assert_eq(is_some_mode(parse_mode("single"), Mode::SinglePlayer), true);
+    assert_eq(is_some_mode(parse_mode("s"),      Mode::SinglePlayer), true);
+}
+test fn test_parse_mode_two() -> Unit {
+    assert_eq(is_some_mode(parse_mode("two"), Mode::TwoPlayer), true);
+    assert_eq(is_some_mode(parse_mode("2"),   Mode::TwoPlayer), true);
+}
+test fn test_parse_mode_invalid() -> Unit {
+    assert_eq(opt_is_none_mode(parse_mode("")),     true);
+    assert_eq(opt_is_none_mode(parse_mode("nope")), true);
+}
+
+// ── Tests: parse_palette ─────────────────────────────────────────────────────
+
+test fn test_parse_palette_bw() -> Unit {
+    assert_eq(is_some_pal(parse_palette("bw"),   Palette::BlackWhite), true);
+    assert_eq(is_some_pal(parse_palette("mono"), Palette::BlackWhite), true);
+}
+test fn test_parse_palette_color() -> Unit {
+    assert_eq(is_some_pal(parse_palette("color"), Palette::Color), true);
+}
+test fn test_parse_palette_invalid() -> Unit {
+    assert_eq(opt_is_none_pal(parse_palette("rgb")), true);
+}
+
+// ── Tests: parse_difficulty ──────────────────────────────────────────────────
+
+test fn test_parse_difficulty_simple() -> Unit {
+    assert_eq(is_some_diff(parse_difficulty("simple"), Difficulty::Simple), true);
+}
+test fn test_parse_difficulty_medium() -> Unit {
+    assert_eq(is_some_diff(parse_difficulty("medium"), Difficulty::Medium), true);
+}
+test fn test_parse_difficulty_hard() -> Unit {
+    assert_eq(is_some_diff(parse_difficulty("hard"), Difficulty::Hard), true);
+}
+test fn test_parse_difficulty_invalid() -> Unit {
+    assert_eq(opt_is_none_diff(parse_difficulty("insane")), true);
+}
+
+// ── Tests: hits_left_paddle / hits_right_paddle ──────────────────────────────
+
+test fn test_hits_left_paddle_true() -> Unit {
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let b: Ball = Ball { x: 1, y: 12, vx: -1, vy: 0 };
+    assert_eq(hits_left_paddle(b, p), true);
+}
+
+test fn test_hits_left_paddle_wrong_direction() -> Unit {
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let b: Ball = Ball { x: 1, y: 12, vx: 1, vy: 0 };
+    assert_eq(hits_left_paddle(b, p), false);
+}
+
+test fn test_hits_left_paddle_out_of_range_y() -> Unit {
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let b: Ball = Ball { x: 1, y: 20, vx: -1, vy: 0 };
+    assert_eq(hits_left_paddle(b, p), false);
+}
+
+test fn test_hits_left_paddle_too_far_x() -> Unit {
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let b: Ball = Ball { x: 5, y: 12, vx: -1, vy: 0 };
+    assert_eq(hits_left_paddle(b, p), false);
+}
+
+test fn test_hits_right_paddle_true() -> Unit {
+    let f: Field = Field { width: 80, height: 22 };
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let b: Ball = Ball { x: 78, y: 12, vx: 1, vy: 0 };
+    assert_eq(hits_right_paddle(b, p, f), true);
+}
+
+test fn test_hits_right_paddle_wrong_direction() -> Unit {
+    let f: Field = Field { width: 80, height: 22 };
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let b: Ball = Ball { x: 78, y: 12, vx: -1, vy: 0 };
+    assert_eq(hits_right_paddle(b, p, f), false);
+}
+
+test fn test_hits_right_paddle_out_of_range_y() -> Unit {
+    let f: Field = Field { width: 80, height: 22 };
+    let p: Paddle = Paddle { y: 10, height: 4 };
+    let b: Ball = Ball { x: 78, y: 4, vx: 1, vy: 0 };
+    assert_eq(hits_right_paddle(b, p, f), false);
+}

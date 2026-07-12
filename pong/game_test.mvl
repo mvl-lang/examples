@@ -164,6 +164,18 @@ total fn speed_step_up(ball: Ball, difficulty: Difficulty, bounces: Int) -> Ball
     }
 }
 
+total fn bump_ball_speed(ball: Ball) -> Ball {
+    let mag: Int = if ball.vx < 0 { 0 - ball.vx } else { ball.vx };
+    let new_mag: Int = if mag < max_speed() { mag + 1 } else { max_speed() };
+    let new_vx: Int = if ball.vx < 0 { 0 - new_mag } else { new_mag };
+    Ball {
+        x:  ball.x,
+        y:  ball.y,
+        vx: new_vx,
+        vy: ball.vy,
+    }
+}
+
 total fn clamp_paddle_y(y: Int, height: Int, field: Field) -> Int {
     if y < 0 {
         0
@@ -398,6 +410,27 @@ test fn test_speed_medium_negative_direction_preserved() -> Unit {
     let b: Ball = Ball { x: 40, y: 10, vx: -1, vy: 0 };
     let after: Ball = speed_step_up(b, Difficulty::Medium, 3);
     assert_eq(after.vx, -2);
+}
+
+// ── Tests: bump_ball_speed (Hard-mode on-score bump) ──────────────────────────
+
+test fn test_bump_ball_speed_positive() -> Unit {
+    let b: Ball = Ball { x: 40, y: 10, vx: 1, vy: 0 };
+    let after: Ball = bump_ball_speed(b);
+    assert_eq(after.vx, 2);
+}
+
+test fn test_bump_ball_speed_caps_at_max() -> Unit {
+    let b: Ball = Ball { x: 40, y: 10, vx: 3, vy: 1 };
+    let after: Ball = bump_ball_speed(b);
+    assert_eq(after.vx, 3);
+    assert_eq(after.vy, 1);
+}
+
+test fn test_bump_ball_speed_negative_preserves_direction() -> Unit {
+    let b: Ball = Ball { x: 40, y: 10, vx: -2, vy: 0 };
+    let after: Ball = bump_ball_speed(b);
+    assert_eq(after.vx, -3);
 }
 
 // ── Tests: move_paddle_raw ────────────────────────────────────────────────────

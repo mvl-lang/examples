@@ -167,10 +167,28 @@ pub total fn bounce_paddle(ball: Ball) -> Ball
     }
 }
 
-/// Speed-up policy per difficulty.  `Simple` never accelerates; `Medium`
-/// accelerates once every `medium_speedup_after()` paddle bounces; `Hard`
-/// gets a separate application in `resolve_scoring`.  All arms cap at
-/// `max_speed()`.
+/// Increase the ball's horizontal-velocity magnitude by 1, capped at
+/// `max_speed()`.  Direction preserved.  y and vy unchanged.
+pub total fn bump_ball_speed(ball: Ball) -> Ball
+    ensures result.x  == ball.x
+    ensures result.y  == ball.y
+    ensures result.vy == ball.vy
+{
+    let mag: Int = if ball.vx < 0 { 0 - ball.vx } else { ball.vx };
+    let new_mag: Int = if mag < max_speed() { mag + 1 } else { max_speed() };
+    let new_vx: Int = if ball.vx < 0 { 0 - new_mag } else { new_mag };
+    Ball {
+        x:  ball.x,
+        y:  ball.y,
+        vx: new_vx,
+        vy: ball.vy,
+    }
+}
+
+/// Speed-up policy per difficulty on a paddle bounce.
+///   Simple: never accelerates
+///   Medium: accelerates once every `medium_speedup_after()` bounces
+///   Hard:   never here — Hard accelerates on score, not bounce
 pub total fn speed_step_up(ball: Ball, difficulty: Difficulty, bounces: Int) -> Ball
     ensures result.x  == ball.x
     ensures result.y  == ball.y
