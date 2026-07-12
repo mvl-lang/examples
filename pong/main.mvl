@@ -103,15 +103,17 @@ partial fn draw_walls(
     game_row: Int,
     max_row: Int,
     field_width: Int,
+    row_off: Int,
+    col_off: Int,
     s: Style,
 ) -> Unit ! Terminal {
     if game_row > max_row {
         ()
     } else {
-        let term_row: Int = game_row + 2;
-        let _: Unit = put(term, term_row, 1, "║", s);
-        let _: Unit = put(term, term_row, field_width + 2, "║", s);
-        draw_walls(term, game_row + 1, max_row, field_width, s)
+        let term_row: Int = game_row + row_off + 1;
+        let _: Unit = put(term, term_row, col_off, "║", s);
+        let _: Unit = put(term, term_row, col_off + field_width + 1, "║", s);
+        draw_walls(term, game_row + 1, max_row, field_width, row_off, col_off, s)
     }
 }
 
@@ -120,59 +122,77 @@ partial fn draw_paddle_at(
     y: Int,
     col: Int,
     height: Int,
+    row_off: Int,
     s: Style,
 ) -> Unit ! Terminal {
     if height <= 0 {
         ()
     } else {
-        let _: Unit = put(term, y + 2, col, "█", s);
-        draw_paddle_at(term, y + 1, col, height - 1, s)
+        let _: Unit = put(term, y + row_off + 1, col, "█", s);
+        draw_paddle_at(term, y + 1, col, height - 1, row_off, s)
     }
+}
+
+/// Compute the top-left offset for the field so it centers in the
+/// current terminal.  row_off / col_off point at the row/col of the
+/// top-left border corner (`╔`).
+partial fn frame_offsets(term: val Terminal, field: Field) -> TerminalSize ! Terminal {
+    let ts: TerminalSize = size(term);
+    // Border adds 2 to each dimension; leave one row below for the score bar.
+    let extra_rows: Int = 3;
+    let col_off: Int = if ts.cols > field.width + 2 { (ts.cols - field.width - 2) / 2 + 1 } else { 1 };
+    let row_off: Int = if ts.rows > field.height + extra_rows { (ts.rows - field.height - extra_rows) / 2 + 1 } else { 1 };
+    TerminalSize { rows: row_off, cols: col_off }
 }
 
 partial fn render_frame(term: val Terminal, game: Game, palette: Palette) -> Unit ! Terminal {
     let _: Unit = clear(term);
     let bs: Style = border_style(palette);
+    let off: TerminalSize = frame_offsets(term, game.field);
+    let row_off: Int = off.rows;
+    let col_off: Int = off.cols;
     let inner: String = dashes(game.field.width, "");
     let top: String = "╔".concat(inner).concat("╗");
     let bot: String = "╚".concat(inner).concat("╝");
-    let _: Unit = put(term, 1, 1, top, bs);
-    let _: Unit = put(term, game.field.height + 2, 1, bot, bs);
-    let _: Unit = draw_walls(term, 0, game.field.height - 1, game.field.width, bs);
+    let _: Unit = put(term, row_off, col_off, top, bs);
+    let _: Unit = put(term, row_off + game.field.height + 1, col_off, bot, bs);
+    let _: Unit = draw_walls(term, 0, game.field.height - 1, game.field.width, row_off, col_off, bs);
 
-    // Left paddle at column 2 (just inside left border)
+    // Left paddle at column just inside left border
     let _: Unit = draw_paddle_at(
         term,
         game.left_paddle.y,
-        2,
+        col_off + 1,
         game.left_paddle.height,
+        row_off,
         left_paddle_style(palette),
     );
     // Right paddle at rightmost inside column
     let _: Unit = draw_paddle_at(
         term,
         game.right_paddle.y,
-        game.field.width + 1,
+        col_off + game.field.width,
         game.right_paddle.height,
+        row_off,
         right_paddle_style(palette),
     );
 
     // Ball
     let _: Unit = put(
         term,
-        game.ball.y + 2,
-        game.ball.x + 2,
+        game.ball.y + row_off + 1,
+        game.ball.x + col_off + 1,
         "●",
         ball_style(palette),
     );
 
-    // Score bar
+    // Score bar centered below the field
     let score_line: String = "Left: "
         .concat(game.left_score.to_string())
         .concat("   Right: ")
         .concat(game.right_score.to_string())
         .concat("   (q or Esc to quit)");
-    put(term, game.field.height + 3, 1, score_line, score_style(palette))
+    put(term, row_off + game.field.height + 2, col_off, score_line, score_style(palette))
 }
 
 partial fn render_win(term: val Terminal, game: Game, side: Side) -> Unit ! Terminal {
@@ -186,8 +206,9 @@ partial fn render_win(term: val Terminal, game: Game, side: Side) -> Unit ! Term
             Mode::TwoPlayer    => "  PLAYER 2 WINS — press any key ",
         },
     };
-    let row: Int = game.field.height / 2 + 2;
-    let col: Int = game.field.width / 2 - 12;
+    let off: TerminalSize = frame_offsets(term, game.field);
+    let row: Int = off.rows + game.field.height / 2;
+    let col: Int = off.cols + game.field.width / 2 - 12;
     put(term, row, col, msg, bold_style())
 }
 

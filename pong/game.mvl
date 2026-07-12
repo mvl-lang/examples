@@ -369,29 +369,18 @@ pub total fn check_win(game: Game, winning_score: Int) -> GameStatus {
 
 // ── Field construction from terminal geometry ─────────────────────────────────
 
-/// Clamp raw terminal dimensions to a valid Field.  Reserves 2 rows
-/// (score bar + status bar) and 2 columns (side borders) from the
-/// available terminal area.
+/// Return a fixed 60×20 logical playfield.  The renderer centers this
+/// inside whatever terminal it's given — the ball and paddles move in
+/// the logical grid at a chunkiness the eye can follow, rather than
+/// pixel-by-pixel on a large terminal.
+///
+/// `cols` and `rows` are ignored today.  If the terminal is smaller
+/// than the logical field the border will overflow — pong requires at
+/// least ~64×24 to render fully.
 pub total fn field_from_terminal(cols: Int, rows: Int) -> Field {
-    // Clamp width to [20..120]
-    let raw_w: Int = cols - 2;
-    let w: Int = if raw_w < 20 {
-        20
-    } else if raw_w > 120 {
-        120
-    } else {
-        raw_w
-    };
-    // Clamp height to [10..40]
-    let raw_h: Int = rows - 2;
-    let h: Int = if raw_h < 10 {
-        10
-    } else if raw_h > 40 {
-        40
-    } else {
-        raw_h
-    };
-    Field { width: w, height: h }
+    let _: Int = cols;
+    let _: Int = rows;
+    Field { width: 60, height: 20 }
 }
 
 // ── New game ──────────────────────────────────────────────────────────────────
