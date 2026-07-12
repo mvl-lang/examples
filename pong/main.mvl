@@ -657,18 +657,13 @@ partial fn trusted_args() -> List[String] ! Env {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-/// Pick a random ball-serve angle: {-1, 0, +1}, biased slightly against 0
-/// so most serves have a visible angle.
+/// Pick a random ball-serve angle: always -1 or +1, never 0.  A
+/// horizontal serve (`vy = 0`) would never bounce off the top or bottom
+/// walls, making the ball trivial to return — so the serve is always
+/// on a slope.
 partial fn random_angle() -> Int ! Random {
-    // int(0, 3) → 0/1/2/3; map to -1, 0, +1, +1 (2/4 chance of +1, 1/4 each other)
-    let r: Int = int(0, 3);
-    if r == 0 {
-        -1
-    } else if r == 1 {
-        0
-    } else {
-        1
-    }
+    let r: Int = int(0, 1);
+    if r == 0 { -1 } else { 1 }
 }
 
 partial fn play(
