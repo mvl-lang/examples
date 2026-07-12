@@ -1,8 +1,7 @@
 # MVL Pong — Requirements
 
 Formal spec for `pong` (in the `mvl-lang/examples` repo) — the classic paddle-and-ball game, built to
-demonstrate all 11 MVL requirements and give the refinement/contract prover
-significant load.
+demonstrate all 11 MVL requirements and give the refinement/contract prover significant load.
 
 Version: 0.1.0 (draft, pre-implementation)
 Last updated: 2026-07-12
@@ -30,8 +29,8 @@ Build a terminal Pong that:
 - No multi-ball, no power-ups, no obstacles.
 - No spin physics — bounces are angle-of-incidence = angle-of-reflection
   with a small `vy` perturbation on paddle-edge hits.
-- No IFC labels (`Secret[T]`, `Tainted[T]`) — a game has no secrets to protect.
-  Req 11 is exercised trivially (no violations to catch).
+- No `Secret[T]` labels — no confidential data.  `Tainted[T]` labels and
+  user-defined labels ARE used, actively enforced by the checker — see §16.
 
 ## 3. Play modes and options
 
@@ -86,9 +85,9 @@ pong/
 ├── README.md             — quickstart + original spec instruction verbatim
 ├── requirements.md       — this file
 ├── LICENSE               — Apache-2.0
-├── models.mvl            — types, refinements, invariants
-├── game.mvl              — pure game logic (all `total fn`)
-├── input.mvl             — Key → PaddleInput (pure)
+├── models.mvl            — types, refinements, invariants, IFC labels (§16)
+├── game.mvl              — pure game logic (all `total fn`), player-labeled moves
+├── input.mvl             — Tainted[Key] → PaddleInput (pure, sanitizes untrusted input)
 ├── main.mvl              — menu + CLI parse + game loop + rendering (effects)
 ├── models_test.mvl       — constructor + invariant tests (~6)
 ├── game_test.mvl         — physics, AI, scoring, win tests (~25)
@@ -109,7 +108,7 @@ pong/
 | 8 | **Termination** | Every function in `game.mvl` / `input.mvl` / `models.mvl` marked `total fn`. Game loop marked `partial fn` (user-driven). |
 | 9 | **Data Race Freedom** | Single-threaded. No actors, no shared state. Trivially satisfied. |
 | 10 | **Refinement & Contracts** | Heavy — see §6 and §7 for the full list of proof obligations. |
-| 11 | **Information Flow** | Trivial — no `Secret`/`Tainted` labels. Documented as satisfied by absence of violations. |
+| 11 | **Information Flow** | Actively enforced — `Tainted[Key]` at the pkg-tui boundary; user-defined `LeftInput`/`RightInput` labels prevent player crosstalk in TwoPlayer mode. See §16. |
 
 ## 6. Refinement types (Req 10, part 1)
 
@@ -314,7 +313,7 @@ Behavior:
 |---|---|---|
 | `models.mvl` | *(none)* | Pure types |
 | `game.mvl` | *(none)* | Pure logic; all `total fn` |
-| `input.mvl` | *(none)* | Pure `Key → PaddleInput` mapping |
+| `input.mvl` | *(none)* | Pure `Tainted[Key] → Option[PaddleInput]` sanitizer |
 | `main.mvl` | `! Terminal + Random + Console + Args` | Menu, loop, rendering, CLI parse |
 
 This split is the single most important design decision — it keeps ~90% of
@@ -357,7 +356,109 @@ run against the local `pong/` sources — no CI-only paths.
 `make all` is the default `.PHONY: all` target. Every commit that touches
 this example is expected to pass it locally.
 
-## 16. Definition of done
+## 16. Information Flow Control (Req 11)
+
+IFC in Pong is not decorative — two labels are load-bearing and would each
+require a runtime test if they were removed.
+
+### 16.1 `Tainted[Key]` at the pkg-tui boundary
+
+Keys arrive from an external, uncontrolled source (a TTY the user could
+automate or replay). Model them as untrusted; require an audited `relabel
+trust` before they influence game state.
+
+```mvl
+// input.mvl — accepts untrusted input, exists to sanitize
+pub total fn key_to_input(k: Tainted[Key]) -> Option[PaddleInput] {
+    match relabel trust(k, "INPUT-KEYBOARD") {
+        Key::Arrow(Direction::Up)   => Some(PaddleInput::Up),
+        Key::Arrow(Direction::Down) => Some(PaddleInput::Down),
+        Key::Char('w') | Key::Char('W') => Some(PaddleInput::Up),
+        Key::Char('s') | Key::Char('S') => Some(PaddleInput::Down),
+        _ => None,
+    }
+}
+```
+
+Every user-driven state transition is auditable by `grep -n "relabel
+trust.*INPUT-KEYBOARD"`, and the compiler proves no key value reaches
+game logic without passing through this function.
+
+### 16.2 User-defined `LeftInput` / `RightInput` labels
+
+In TwoPlayer mode we want a genuine compile-time guarantee: the left
+player's keys can never move the right paddle. Without IFC this is a test
+obligation; with IFC it is a type error.
+
+```mvl
+// models.mvl — declare the labels (both audit)
+pub label LeftInput  audit
+pub label RightInput audit
+
+pub total relabel to_left_input:  _ -> LeftInput  audit
+pub total relabel to_right_input: _ -> RightInput audit
+
+// game.mvl — signatures make the invariant unforgeable
+pub total fn move_left_paddle(
+    p: Paddle,
+    input: LeftInput[PaddleInput],
+    field: Field,
+) -> Paddle { ... }
+
+pub total fn move_right_paddle(
+    p: Paddle,
+    input: RightInput[PaddleInput],
+    field: Field,
+) -> Paddle { ... }
+```
+
+Passing a `LeftInput[PaddleInput]` to `move_right_paddle` is a Req 11
+type error — no test needed, no runtime check, no code review rule.
+
+### 16.3 Dispatch site
+
+`main.mvl` routes each key to the correct player and only there does a
+key value cross into a labeled type:
+
+```mvl
+// Left player: W / S / Space
+match key_to_input(raw_key) {
+    Some(i) => move_left_paddle(p, relabel to_left_input(i, "LEFT-KEY"), field),
+    None => p,
+}
+
+// Right player: Up / Down / Enter (TwoPlayer only)
+match key_to_input(raw_key) {
+    Some(i) => move_right_paddle(p, relabel to_right_input(i, "RIGHT-KEY"), field),
+    None => p,
+}
+```
+
+The two `relabel` calls are the only points at which player attribution
+is decided; the checker guarantees no shortcut around them.
+
+### 16.4 Non-goals for IFC in this example
+
+- No `Secret[T]` — nothing in Pong is confidential.
+- No IFC on CLI args — `--difficulty=hard` is validated at parse time by
+  a total fn returning a typed enum; adding `Tainted[String]` there
+  would be ceremony, not enforcement.
+- No IFC on random ball direction — the `Random` effect is already the
+  audit trail.
+
+### 16.5 Proof obligations added by IFC
+
+| Site | Count |
+|---|---|
+| `key_to_input(k)` — one audited `relabel trust` | 1 |
+| Left dispatch — one audited `relabel to_left_input` | 1 |
+| Right dispatch — one audited `relabel to_right_input` | 1 |
+| Label decls / relabel decls — 2 labels + 2 transitions | 4 static |
+
+**Total IFC-related audit points: 3 (relabels) + 4 (declarations).**
+These roll into the assurance report as a "Req 11 audit trail" section.
+
+## 17. Definition of done
 
 - `make check` — passes with zero errors.
 - `make prove` — every `requires`/`ensures` and every refinement discharge
