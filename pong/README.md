@@ -67,7 +67,50 @@ discharges at compile time.  Highlights from `requirements.md §7`:
 - `resolve_scoring` — score monotonically non-decreasing; ≤1 point per call
 - `speed_step_up` — velocity magnitude ≤ 3 (cap) for every difficulty
 
-Run `mvl prove .` to see the per-obligation breakdown.
+Run `mvl prove --stdlib=proven .` to see the per-obligation breakdown.
+
+### Layer distribution
+
+Current run: **45 proven / 23 runtime — L1:40 L4:5**.  The MVL solver
+is layered L1 → L5, cheapest first; each obligation escalates only
+until one layer discharges it or all five give up (falling to a
+runtime check).  Pong exercises just two of the five:
+
+| Layer | Fires on shape | Pong count |
+|---|---|---|
+| **L1** (trivial) | Identity (`result.f == ball.f`), literal (`result == 0`), struct-eval | **40** |
+| L2 (interval)   | Ident arg + refined-int interval hypothesis | 0 |
+| L3 (symbolic)   | Path-collect through `Expr::If`/`Block`/`FnCall` at the arg | 0 |
+| **L4** (Cooper QE) | Linear integer arithmetic over refined atoms (`field.height - 1 >= 0` given `field.height >= 10`) | **5** |
+| L5 (Z3)         | Modular / non-linear / mixed bool-int obligations | 0 |
+
+**Why no L2, L3, L5?**
+
+- **L2** never wins because L1 or L4 handles the same site first.  L2
+  wants an `Ident` arg + a refined interval; every arg pong actually
+  reaches L2 with is either already covered by L1 shape-equality (for
+  identity ensures) or has escalated to a Binary form that L4 picks
+  up (for arithmetic).
+- **L3** never fires because the contract checker's per-branch
+  descent (`check_ensures_for_return_expr_recur`) already splits
+  `if`-tails BEFORE dispatch — each branch reaches the solver as a
+  concrete expression, not as `Expr::If`.  L3 would kick in for
+  `f(if C { A } else { B })` at a call site, which pong doesn't have.
+- **L5** never fires because pong's arithmetic is all linear-integer;
+  the one modular expression (`bounces % medium_speedup_after == 0`)
+  lives inside a `match` arm that reduces to a `Bool` via case
+  analysis, not a shape L5 needs to be invoked for.
+
+The 23 runtime checks are honest cost: they name previously-anonymous
+guarantees, and several hit known arithmetic-layer walls
+(`inject_condition` skips var-vs-`FieldAccess`, Cooper doesn't yet see
+`x + 1 >= x` under compound-atom rewrites, division of a bounded
+variable).  Runtime enforcement continues to catch violations; the
+declared ensures reify the contract at the call boundary.
+
+The layered dispatch and atom-normalization plumbing that makes L4
+reach cross-module struct fields is documented in
+[mvl-lang/mvl ADR-0055](https://github.com/mvl-lang/mvl/blob/main/.openspec/adr/0055-solver-atom-normalization.md).
 
 ---
 
