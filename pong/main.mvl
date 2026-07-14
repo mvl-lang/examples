@@ -383,7 +383,7 @@ partial fn game_loop(
         game = game_tick(game, key_opt);
         // If someone just scored, apply a fresh random angle so every
         // serve starts on a slope.  Also bump ball speed on Hard mode —
-        // Hard accelerates once per point, capped at max_speed().
+        // Hard accelerates once per point, capped at max_speed.
         if game.left_score > prev_left || game.right_score > prev_right {
             let bias: Int = random_angle();
             game = with_ball_angle(game, bias);
