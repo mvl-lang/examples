@@ -1,0 +1,810 @@
+// main.mvl — Pong entry point: menu, CLI parse, game loop, rendering.
+//
+// This is the only file with effects.  Everything else in the package
+// (`models.mvl`, `game.mvl`, `input.mvl`) is `total fn` and fully
+// testable without a terminal.
+//
+// Effect surface:
+//   ! Terminal + Random + Console + Env
+//
+// Layout:
+//   1. Style helpers (palette-driven)
+//   2. Rendering primitives + full-frame render
+//   3. Collision detection (kept here, calls game.mvl's `bounce_paddle`)
+//   4. Game tick (one iteration — pure state transition, no I/O)
+//   5. Game loop (partial fn while true, reads input, renders)
+//   6. Menu loop
+//   7. CLI argparse
+//   8. main()
+//
+// Usage:
+//   mvl run main.mvl                          # menu → play
+//   mvl run main.mvl -- --mode single --palette color --difficulty medium
+//   make run
+
+use models::{
+    Field, Ball, Paddle,
+    Mode, Palette, Difficulty, Side, GameStatus, PaddleInput,
+    Game, Config,
+}
+
+use game::{
+    new_game, serve_ball, step_ball, bounce_wall, bounce_paddle,
+    at_wall, speed_step_up, bump_ball_speed, ai_move, resolve_scoring, check_win,
+    field_from_terminal, paddle_height,
+    dispatch_left_paddle, dispatch_right_paddle,
+    with_ball_angle,
+}
+
+use std.random.{int}
+
+use input::{key_to_left_input, key_to_right_input, is_quit_key, is_commit_key}
+
+use pkg.tui.{
+    Terminal, Key, Direction, Color, Style, TerminalSize,
+    new_terminal, drop_terminal, size, read_key, read_key_timeout,
+    clear, set_cursor, print_styled,
+    style, bold_style, colored, bold_colored,
+}
+
+use std.env.{args}
+
+// ── Style helpers (palette-driven) ────────────────────────────────────────────
+
+total fn border_style(_p: Palette) -> Style {
+    // Both palettes: white bold borders read clearly on any terminal.
+    bold_style()
+}
+
+total fn ball_style(p: Palette) -> Style {
+    match p {
+        Palette::BlackWhite => bold_style(),
+        Palette::Color      => bold_colored(Color::Yellow),
+    }
+}
+
+total fn left_paddle_style(p: Palette) -> Style {
+    match p {
+        Palette::BlackWhite => bold_style(),
+        Palette::Color      => bold_colored(Color::Cyan),
+    }
+}
+
+total fn right_paddle_style(p: Palette) -> Style {
+    match p {
+        Palette::BlackWhite => bold_style(),
+        Palette::Color      => bold_colored(Color::Magenta),
+    }
+}
+
+total fn score_style(_p: Palette) -> Style {
+    bold_style()
+}
+
+// ── Rendering primitives ──────────────────────────────────────────────────────
+
+partial fn put(
+    term: val Terminal,
+    row: Int,
+    col: Int,
+    text: String,
+    s: Style,
+) -> Unit ! Terminal {
+    let _: Unit = set_cursor(term, row, col);
+    print_styled(term, text, s)
+}
+
+partial fn dashes(n: Int, acc: String) -> String {
+    if n <= 0 { acc } else { dashes(n - 1, acc.concat("═")) }
+}
+
+partial fn draw_walls(
+    term: val Terminal,
+    game_row: Int,
+    max_row: Int,
+    field_width: Int,
+    row_off: Int,
+    col_off: Int,
+    s: Style,
+) -> Unit ! Terminal {
+    if game_row > max_row {
+        ()
+    } else {
+        let term_row: Int = game_row + row_off + 1;
+        let _: Unit = put(term, term_row, col_off, "║", s);
+        let _: Unit = put(term, term_row, col_off + field_width + 1, "║", s);
+        draw_walls(term, game_row + 1, max_row, field_width, row_off, col_off, s)
+    }
+}
+
+partial fn draw_paddle_at(
+    term: val Terminal,
+    y: Int,
+    col: Int,
+    height: Int,
+    row_off: Int,
+    s: Style,
+) -> Unit ! Terminal {
+    if height <= 0 {
+        ()
+    } else {
+        let _: Unit = put(term, y + row_off + 1, col, "█", s);
+        draw_paddle_at(term, y + 1, col, height - 1, row_off, s)
+    }
+}
+
+/// Erase a paddle by writing spaces over its cells.  Used before the
+/// paddle is redrawn at its new position — the only cells that change
+/// per tick are the row leaving and the row entering.
+partial fn erase_paddle_at(
+    term: val Terminal,
+    y: Int,
+    col: Int,
+    height: Int,
+    row_off: Int,
+) -> Unit ! Terminal {
+    if height <= 0 {
+        ()
+    } else {
+        let _: Unit = put(term, y + row_off + 1, col, " ", style());
+        erase_paddle_at(term, y + 1, col, height - 1, row_off)
+    }
+}
+
+/// Compute the top-left offset for the field so it centers in the
+/// current terminal.  row_off / col_off point at the row/col of the
+/// top-left border corner (`╔`).
+partial fn frame_offsets(term: val Terminal, field: Field) -> TerminalSize ! Terminal {
+    let ts: TerminalSize = size(term);
+    // Border adds 2 to each dimension; leave one row below for the score bar.
+    let extra_rows: Int = 3;
+    let col_off: Int = if ts.cols > field.width + 2 { (ts.cols - field.width - 2) / 2 + 1 } else { 1 };
+    let row_off: Int = if ts.rows > field.height + extra_rows { (ts.rows - field.height - extra_rows) / 2 + 1 } else { 1 };
+    TerminalSize { rows: row_off, cols: col_off }
+}
+
+/// Full-frame render: clear the terminal, draw the border + walls + score
+/// bar + paddles + ball.  Called ONCE at game start.  Subsequent frames
+/// use `render_delta` to avoid the whole-screen flicker of clear().
+partial fn render_full(term: val Terminal, game: Game, palette: Palette) -> Unit ! Terminal {
+    let _: Unit = clear(term);
+    let bs: Style = border_style(palette);
+    let off: TerminalSize = frame_offsets(term, game.field);
+    let row_off: Int = off.rows;
+    let col_off: Int = off.cols;
+    let inner: String = dashes(game.field.width, "");
+    let top: String = "╔".concat(inner).concat("╗");
+    let bot: String = "╚".concat(inner).concat("╝");
+    let _: Unit = put(term, row_off, col_off, top, bs);
+    let _: Unit = put(term, row_off + game.field.height + 1, col_off, bot, bs);
+    let _: Unit = draw_walls(term, 0, game.field.height - 1, game.field.width, row_off, col_off, bs);
+    let _: Unit = draw_paddle_at(term, game.left_paddle.y,  col_off + 1,                 game.left_paddle.height,  row_off, left_paddle_style(palette));
+    let _: Unit = draw_paddle_at(term, game.right_paddle.y, col_off + game.field.width,  game.right_paddle.height, row_off, right_paddle_style(palette));
+    let _: Unit = put(term, game.ball.y + row_off + 1, game.ball.x + col_off + 1, "●", ball_style(palette));
+    let score_line: String = "Left: "
+        .concat(game.left_score.to_string())
+        .concat("   Right: ")
+        .concat(game.right_score.to_string())
+        .concat("   (q or Esc to quit)");
+    put(term, row_off + game.field.height + 2, col_off, score_line, score_style(palette))
+}
+
+/// Delta render: only touch the cells that changed between `prev` and
+/// `curr` — the old ball is erased, both paddles are erased-then-redrawn
+/// (they may have moved by ±1 row), the new ball is drawn, and the
+/// score bar is refreshed.  Border and walls are already on screen from
+/// the initial `render_full` and never need repainting.
+///
+/// This is what kills the flicker: no `clear()`, no border repaint —
+/// just ~30 cell writes per frame.
+partial fn render_delta(
+    term: val Terminal,
+    prev: Game,
+    curr: Game,
+    palette: Palette,
+) -> Unit ! Terminal {
+    let off: TerminalSize = frame_offsets(term, curr.field);
+    let row_off: Int = off.rows;
+    let col_off: Int = off.cols;
+
+    // Erase old ball
+    let _: Unit = put(term, prev.ball.y + row_off + 1, prev.ball.x + col_off + 1, " ", style());
+
+    // Erase + redraw left paddle
+    let _: Unit = erase_paddle_at(term, prev.left_paddle.y,  col_off + 1, prev.left_paddle.height,  row_off);
+    let _: Unit = draw_paddle_at(term,  curr.left_paddle.y,  col_off + 1, curr.left_paddle.height,  row_off, left_paddle_style(palette));
+
+    // Erase + redraw right paddle
+    let _: Unit = erase_paddle_at(term, prev.right_paddle.y, col_off + curr.field.width, prev.right_paddle.height, row_off);
+    let _: Unit = draw_paddle_at(term,  curr.right_paddle.y, col_off + curr.field.width, curr.right_paddle.height, row_off, right_paddle_style(palette));
+
+    // Draw new ball
+    let _: Unit = put(term, curr.ball.y + row_off + 1, curr.ball.x + col_off + 1, "●", ball_style(palette));
+
+    // Refresh score bar (cheap; only changes on a score)
+    let score_line: String = "Left: "
+        .concat(curr.left_score.to_string())
+        .concat("   Right: ")
+        .concat(curr.right_score.to_string())
+        .concat("   (q or Esc to quit)");
+    put(term, row_off + curr.field.height + 2, col_off, score_line, score_style(palette))
+}
+
+partial fn render_win(term: val Terminal, game: Game, side: Side) -> Unit ! Terminal {
+    let msg: String = match side {
+        Side::Left  => match game.mode {
+            Mode::SinglePlayer => "  YOU WIN — press any key ",
+            Mode::TwoPlayer    => "  PLAYER 1 WINS — press any key ",
+        },
+        Side::Right => match game.mode {
+            Mode::SinglePlayer => "  YOU LOSE — press any key ",
+            Mode::TwoPlayer    => "  PLAYER 2 WINS — press any key ",
+        },
+    };
+    let off: TerminalSize = frame_offsets(term, game.field);
+    let row: Int = off.rows + game.field.height / 2;
+    let col: Int = off.cols + game.field.width / 2 - 12;
+    put(term, row, col, msg, bold_style())
+}
+
+// ── Collision detection ──────────────────────────────────────────────────────
+
+/// Ball is at the left paddle's column, moving left, and vertically
+/// overlaps the paddle.  Left paddle occupies column 0 (game coords).
+total fn hits_left_paddle(ball: Ball, paddle: Paddle) -> Bool {
+    ball.x <= 1
+        && ball.vx < 0
+        && ball.y >= paddle.y
+        && ball.y < paddle.y + paddle.height
+}
+
+/// Ball is at the right paddle's column, moving right, and vertically
+/// overlaps the paddle.  Right paddle occupies column `field.width - 1`.
+total fn hits_right_paddle(ball: Ball, paddle: Paddle, field: Field) -> Bool {
+    ball.x >= field.width - 2
+        && ball.vx > 0
+        && ball.y >= paddle.y
+        && ball.y < paddle.y + paddle.height
+}
+
+// ── One tick of the game — pure state transition ──────────────────────────────
+
+/// Advance the game by one tick.
+/// Not `total fn` — it composes calls into game.mvl which are total,
+/// but the closure includes user input decision paths.
+total fn game_tick(g: Game, key: Option[Key]) -> Game {
+    // Extract left/right inputs from the same key (only one player presses
+    // a given tick, but the key could belong to either side).
+    let left_in: Option[PaddleInput] = match key {
+        Some(k) => key_to_left_input(k),
+        None    => None,
+    };
+    let right_key_in: Option[PaddleInput] = match key {
+        Some(k) => key_to_right_input(k),
+        None    => None,
+    };
+
+    // Move paddles.
+    let left_p: Paddle = match left_in {
+        Some(i) => dispatch_left_paddle(g.left_paddle, i, g.field),
+        None    => g.left_paddle,
+    };
+    let right_p: Paddle = match g.mode {
+        Mode::SinglePlayer => ai_move(g.right_paddle, g.ball, g.field),
+        Mode::TwoPlayer    => match right_key_in {
+            Some(i) => dispatch_right_paddle(g.right_paddle, i, g.field),
+            None    => g.right_paddle,
+        },
+    };
+
+    // Step ball, then bounce off top/bottom walls.
+    let ball1: Ball = step_ball(g.ball, g.field);
+    let ball2: Ball = if at_wall(ball1, g.field) { bounce_wall(ball1, g.field) } else { ball1 };
+
+    // Paddle collision.
+    let hit_left:  Bool = hits_left_paddle(ball2, left_p);
+    let hit_right: Bool = hits_right_paddle(ball2, right_p, g.field);
+    let ball3: Ball = if hit_left || hit_right { bounce_paddle(ball2) } else { ball2 };
+
+    // Rally counter + Medium-difficulty speed-up on a paddle bounce.
+    let new_bounces: Int = if hit_left || hit_right {
+        if g.rally_bounces < 1000 { g.rally_bounces + 1 } else { g.rally_bounces }
+    } else {
+        g.rally_bounces
+    };
+    let ball4: Ball = if hit_left || hit_right {
+        speed_step_up(ball3, g.difficulty, new_bounces)
+    } else {
+        ball3
+    };
+
+    // Build the mid-tick game and resolve scoring.
+    let mid: Game = Game {
+        field:         g.field,
+        ball:          ball4,
+        left_paddle:   left_p,
+        right_paddle:  right_p,
+        left_score:    g.left_score,
+        right_score:   g.right_score,
+        rally_bounces: new_bounces,
+        mode:          g.mode,
+        difficulty:    g.difficulty,
+        status:        g.status,
+    };
+    resolve_scoring(mid)
+}
+
+// ── Game loop ─────────────────────────────────────────────────────────────────
+
+/// Result of one game — did the user quit, and what was the final status?
+pub type Outcome = struct {
+    quit:   Bool,
+    status: GameStatus,
+}
+
+partial fn game_loop(
+    term: val Terminal,
+    initial: Game,
+    palette: Palette,
+    winning_score: Int,
+) -> Outcome ! Terminal + Random {
+    let game: ref Game = initial;
+    // Paint the full frame once — border, walls, paddles, ball, score.
+    let _: Unit = render_full(term, game, palette);
+    while true {
+        // Check for a winner before reading input.
+        let status: GameStatus = check_win(game, winning_score);
+        match status {
+            GameStatus::Won(side) => {
+                let _: Unit = render_win(term, game, side);
+                let _: Result[Option[Key], String] = read_key_timeout(term, 30000);
+                return Outcome { quit: false, status: GameStatus::Won(side) };
+            },
+            GameStatus::Playing => (),
+        }
+
+        // 120ms per tick.  Ball moves once per tick — halving this
+        // rate halves the on-screen ball and paddle speed.
+        let kr: Result[Option[Key], String] = read_key_timeout(term, 120);
+        let key_opt: Option[Key] = match kr {
+            Ok(o)  => o,
+            Err(_) => None,
+        };
+        let quit: Bool = match key_opt {
+            Some(k) => is_quit_key(k),
+            None    => false,
+        };
+        if quit {
+            return Outcome { quit: true, status: GameStatus::Playing };
+        }
+        let prev_left:  Int = game.left_score;
+        let prev_right: Int = game.right_score;
+        let prev_snapshot: Game = game;
+        game = game_tick(game, key_opt);
+        // If someone just scored, apply a fresh random angle so every
+        // serve starts on a slope.  Also bump ball speed on Hard mode —
+        // Hard accelerates once per point, capped at max_speed.
+        if game.left_score > prev_left || game.right_score > prev_right {
+            let bias: Int = random_angle();
+            game = with_ball_angle(game, bias);
+            let is_hard: Bool = match game.difficulty {
+                Difficulty::Hard   => true,
+                Difficulty::Simple => false,
+                Difficulty::Medium => false,
+            };
+            if is_hard {
+                let bumped_ball: Ball = bump_ball_speed(game.ball);
+                game = Game {
+                    field:         game.field,
+                    ball:          bumped_ball,
+                    left_paddle:   game.left_paddle,
+                    right_paddle:  game.right_paddle,
+                    left_score:    game.left_score,
+                    right_score:   game.right_score,
+                    rally_bounces: game.rally_bounces,
+                    mode:          game.mode,
+                    difficulty:    game.difficulty,
+                    status:        game.status,
+                };
+            }
+            // A score means the whole board reset — repaint everything.
+            let _: Unit = render_full(term, game, palette);
+        } else {
+            let _: Unit = render_delta(term, prev_snapshot, game, palette);
+        }
+    }
+    Outcome { quit: false, status: GameStatus::Playing }
+}
+
+// ── Menu ──────────────────────────────────────────────────────────────────────
+
+total fn cycle_mode(m: Mode) -> Mode {
+    match m {
+        Mode::SinglePlayer => Mode::TwoPlayer,
+        Mode::TwoPlayer    => Mode::SinglePlayer,
+    }
+}
+
+total fn cycle_palette(p: Palette) -> Palette {
+    match p {
+        Palette::BlackWhite => Palette::Color,
+        Palette::Color      => Palette::BlackWhite,
+    }
+}
+
+total fn cycle_difficulty(d: Difficulty) -> Difficulty {
+    match d {
+        Difficulty::Simple => Difficulty::Medium,
+        Difficulty::Medium => Difficulty::Hard,
+        Difficulty::Hard   => Difficulty::Simple,
+    }
+}
+
+total fn mode_label(m: Mode) -> String {
+    match m {
+        Mode::SinglePlayer => "Single",
+        Mode::TwoPlayer    => "Two   ",
+    }
+}
+
+total fn palette_label(p: Palette) -> String {
+    match p {
+        Palette::BlackWhite => "B/W   ",
+        Palette::Color      => "Color ",
+    }
+}
+
+total fn difficulty_label(d: Difficulty) -> String {
+    match d {
+        Difficulty::Simple => "Simple",
+        Difficulty::Medium => "Medium",
+        Difficulty::Hard   => "Hard  ",
+    }
+}
+
+partial fn horiz_line(n: Int, acc: String) -> String {
+    if n <= 0 {
+        acc
+    } else {
+        horiz_line(n - 1, acc.concat("═"))
+    }
+}
+
+partial fn draw_side_walls(
+    term: val Terminal,
+    row: Int,
+    max_row: Int,
+    right_col: Int,
+    s: Style,
+) -> Unit ! Terminal {
+    if row > max_row {
+        ()
+    } else {
+        let _: Unit = put(term, row, 1, "║", s);
+        let _: Unit = put(term, row, right_col, "║", s);
+        draw_side_walls(term, row + 1, max_row, right_col, s)
+    }
+}
+
+partial fn draw_menu(
+    term: val Terminal,
+    config: Config,
+    sel: Int,
+) -> Unit ! Terminal {
+    let _: Unit = clear(term);
+    let s: Style = bold_style();
+    let ts: TerminalSize = size(term);
+    // Box fills the whole terminal.  Top border at row 1, bottom at rows.
+    let inner: String = horiz_line(ts.cols - 2, "");
+    let top: String = "╔".concat(inner).concat("╗");
+    let bot: String = "╚".concat(inner).concat("╝");
+    let _: Unit = put(term, 1, 1, top, s);
+    let _: Unit = put(term, ts.rows, 1, bot, s);
+    let _: Unit = draw_side_walls(term, 2, ts.rows - 1, ts.cols, s);
+
+    // Centre the content vertically: nine text rows spanning
+    // (title, blank, mode, palette, difficulty, blank, controls×4, blank,
+    // menu-hint) = 13 rows.  Start row = (rows - 13) / 2 + 2.
+    let block_h: Int = 13;
+    let start_row: Int = (ts.rows - block_h) / 2 + 1;
+    let title_col: Int = (ts.cols - 15) / 2;
+    let opt_col:   Int = (ts.cols - 28) / 2;
+    let ctrl_col:  Int = (ts.cols - 30) / 2;
+    let hint_col:  Int = (ts.cols - 40) / 2;
+
+    let _: Unit = put(term, start_row, title_col, "M V L   P O N G", s);
+
+    let mode_prefix:       String = if sel == 0 { "▶ " } else { "  " };
+    let palette_prefix:    String = if sel == 1 { "▶ " } else { "  " };
+    let difficulty_prefix: String = if sel == 2 { "▶ " } else { "  " };
+    let mode_line:       String = mode_prefix
+        .concat("Mode:       ").concat(mode_label(config.mode));
+    let palette_line:    String = palette_prefix
+        .concat("Palette:    ").concat(palette_label(config.palette));
+    let difficulty_line: String = difficulty_prefix
+        .concat("Difficulty: ").concat(difficulty_label(config.difficulty));
+
+    let _: Unit = put(term, start_row + 2, opt_col, mode_line, s);
+    let _: Unit = put(term, start_row + 3, opt_col, palette_line, s);
+    let _: Unit = put(term, start_row + 4, opt_col, difficulty_line, s);
+
+    let _: Unit = put(term, start_row + 6, ctrl_col, "In-game controls:", s);
+    let _: Unit = put(term, start_row + 7, ctrl_col, "  W / S     — left paddle", s);
+    let _: Unit = put(term, start_row + 8, ctrl_col, "  ↑ / ↓     — right paddle", s);
+    let _: Unit = put(term, start_row + 9, ctrl_col, "  q / Esc   — quit", s);
+
+    put(term, start_row + 11, hint_col, "Menu:  ↑↓ move · ←→ cycle · ⏎ start", s)
+}
+
+total fn cycle_config_at(cfg: Config, sel: Int) -> Config {
+    if sel == 0 {
+        Config {
+            mode:          cycle_mode(cfg.mode),
+            palette:       cfg.palette,
+            difficulty:    cfg.difficulty,
+            winning_score: cfg.winning_score,
+        }
+    } else if sel == 1 {
+        Config {
+            mode:          cfg.mode,
+            palette:       cycle_palette(cfg.palette),
+            difficulty:    cfg.difficulty,
+            winning_score: cfg.winning_score,
+        }
+    } else {
+        Config {
+            mode:          cfg.mode,
+            palette:       cfg.palette,
+            difficulty:    cycle_difficulty(cfg.difficulty),
+            winning_score: cfg.winning_score,
+        }
+    }
+}
+
+/// Menu-tick action.
+type MenuAction = enum {
+    NavUp,
+    NavDown,
+    Cycle,
+    Commit,
+    Cancel,
+    Ignore,
+}
+
+total fn key_to_menu_action(k: Key) -> MenuAction {
+    if is_commit_key(k) {
+        MenuAction::Commit
+    } else if is_quit_key(k) {
+        MenuAction::Cancel
+    } else {
+        match k {
+            Key::Arrow(Direction::Up)    => MenuAction::NavUp,
+            Key::Arrow(Direction::Down)  => MenuAction::NavDown,
+            Key::Arrow(Direction::Left)  => MenuAction::Cycle,
+            Key::Arrow(Direction::Right) => MenuAction::Cycle,
+            _ => MenuAction::Ignore,
+        }
+    }
+}
+
+partial fn menu_loop(
+    term: val Terminal,
+    initial: Config,
+) -> Option[Config] ! Terminal {
+    let cfg: ref Config = initial;
+    let sel: ref Int = 0;
+    while true {
+        let _: Unit = draw_menu(term, cfg, sel);
+        let kr: Result[Key, String] = read_key(term);
+        let action: MenuAction = match kr {
+            Err(_) => MenuAction::Cancel,
+            Ok(k)  => key_to_menu_action(k),
+        };
+        // Non-exhaustive-looking cascade: expression-form arms only allow
+        // pure expressions, so returns/assignments live outside the match.
+        let is_cancel: Bool = match action { MenuAction::Cancel => true, _ => false };
+        if is_cancel { return None; }
+        let is_commit: Bool = match action { MenuAction::Commit => true, _ => false };
+        if is_commit { return Some(cfg); }
+        let is_nav_up: Bool = match action { MenuAction::NavUp => true, _ => false };
+        if is_nav_up { sel = if sel > 0 { sel - 1 } else { 2 }; }
+        let is_nav_down: Bool = match action { MenuAction::NavDown => true, _ => false };
+        if is_nav_down { sel = if sel < 2 { sel + 1 } else { 0 }; }
+        let is_cycle: Bool = match action { MenuAction::Cycle => true, _ => false };
+        if is_cycle { cfg = cycle_config_at(cfg, sel); }
+    }
+    Some(cfg)
+}
+
+// ── CLI arg parsing ──────────────────────────────────────────────────────────
+
+total fn parse_mode(s: String) -> Option[Mode] {
+    if s == "single" || s == "s" {
+        Some(Mode::SinglePlayer)
+    } else if s == "two" || s == "2" {
+        Some(Mode::TwoPlayer)
+    } else {
+        None
+    }
+}
+
+total fn parse_palette(s: String) -> Option[Palette] {
+    if s == "bw" || s == "mono" {
+        Some(Palette::BlackWhite)
+    } else if s == "color" {
+        Some(Palette::Color)
+    } else {
+        None
+    }
+}
+
+total fn parse_difficulty(s: String) -> Option[Difficulty] {
+    if s == "simple" {
+        Some(Difficulty::Simple)
+    } else if s == "medium" {
+        Some(Difficulty::Medium)
+    } else if s == "hard" {
+        Some(Difficulty::Hard)
+    } else {
+        None
+    }
+}
+
+/// Take element `i` from `argv` or empty string if out of range.
+total fn arg_at(argv: List[String], i: Int) -> String {
+    match argv.get(i) {
+        Some(v) => v,
+        None    => "",
+    }
+}
+
+/// Parse an `--key value` pair from raw CLI args.
+/// Returns None if the flag isn't present.
+total fn find_flag(argv: List[String], flag: String) -> Option[String] {
+    let n: Int = argv.len();
+    let i: ref Int = 0;
+    let hit: ref Int = 0 - 1;
+    while i < n decreases n - i {
+        let cur: String = arg_at(argv, i);
+        if cur == flag && i + 1 < n {
+            hit = i + 1;
+            i = n;
+        } else {
+            i = i + 1;
+        }
+    }
+    if hit >= 0 {
+        Some(arg_at(argv, hit))
+    } else {
+        None
+    }
+}
+
+/// Parse CLI args into a Config.  Returns:
+///   None                   — no --mode / --palette / --difficulty flags at all
+///                            → open the interactive menu with defaults
+///   Some(Ok(Config))       — all three provided and valid → skip the menu
+///   Some(Err(msg))         — at least one flag present but invalid → error out
+total fn parse_config(argv: List[String]) -> Option[Result[Config, String]] {
+    let m: Option[String] = find_flag(argv, "--mode");
+    let p: Option[String] = find_flag(argv, "--palette");
+    let d: Option[String] = find_flag(argv, "--difficulty");
+
+    match m {
+        None => match p {
+            None => match d {
+                None => None,
+                Some(_) => Some(Err("--difficulty given without --mode and --palette")),
+            },
+            Some(_) => Some(Err("--palette given without --mode")),
+        },
+        Some(ms) => match p {
+            None => Some(Err("--mode given without --palette")),
+            Some(ps) => match d {
+                None => Some(Err("--mode/--palette given without --difficulty")),
+                Some(ds) => {
+                    match parse_mode(ms) {
+                        None => Some(Err("invalid --mode value; expected single|two")),
+                        Some(mode) => match parse_palette(ps) {
+                            None => Some(Err("invalid --palette value; expected bw|color")),
+                            Some(pal) => match parse_difficulty(ds) {
+                                None => Some(Err("invalid --difficulty value; expected simple|medium|hard")),
+                                Some(diff) => Some(Ok(Config {
+                                    mode:          mode,
+                                    palette:       pal,
+                                    difficulty:    diff,
+                                    winning_score: 11,
+                                })),
+                            },
+                        },
+                    }
+                },
+            },
+        },
+    }
+}
+
+/// Trust the process argv at the boundary — required to move `Tainted[String]`
+/// values into a plain `String` list for parsing.
+partial fn trusted_args() -> List[String] ! Env {
+    let raw: List[Tainted[String]] = args();
+    let n: Int = raw.len();
+    let i: ref Int = 0;
+    let out: ref List[String] = [];
+    while i < n {
+        let opt: Option[Tainted[String]] = raw.get(i);
+        let has: Bool = match opt { Some(_) => true, None => false };
+        if has {
+            let t: Tainted[String] = match opt {
+                Some(x) => x,
+                None    => relabel taint("", "CLI-PARSE-UNREACHABLE"),
+            };
+            let _: Unit = out.push(relabel trust(t, "CLI-PARSE"));
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+/// Pick a random ball-serve angle: always -1 or +1, never 0.  A
+/// horizontal serve (`vy = 0`) would never bounce off the top or bottom
+/// walls, making the ball trivial to return — so the serve is always
+/// on a slope.
+partial fn random_angle() -> Int ! Random {
+    let r: Int = int(0, 1);
+    if r == 0 { -1 } else { 1 }
+}
+
+partial fn play(
+    term: val Terminal,
+    cfg: Config,
+) -> Bool ! Terminal + Random {
+    let ts: TerminalSize = size(term);
+    let field: Field = field_from_terminal(ts.cols, ts.rows);
+    let bias: Int = random_angle();
+    let g0: Game = with_ball_angle(new_game(field, cfg.mode, cfg.difficulty), bias);
+    let outcome: Outcome = game_loop(term, g0, cfg.palette, cfg.winning_score);
+    outcome.quit
+}
+
+partial fn main() -> Unit ! Terminal + Random + Console + Env {
+    let argv: List[String] = trusted_args();
+    let cli: Option[Result[Config, String]] = parse_config(argv);
+    match cli {
+        Some(Err(msg)) => {
+            eprintln("pong: ".concat(msg));
+            ()
+        },
+        _ => {
+            match new_terminal() {
+                Err(msg) => println("pong: ".concat(msg)),
+                Ok(term) => {
+                    let default_cfg: Config = Config {
+                        mode:          Mode::SinglePlayer,
+                        palette:       Palette::Color,
+                        difficulty:    Difficulty::Medium,
+                        winning_score: 11,
+                    };
+                    let cfg_opt: Option[Config] = match cli {
+                        Some(Ok(c)) => Some(c),
+                        Some(Err(_)) => None,  // unreachable — outer match caught it
+                        None => menu_loop(term, default_cfg),
+                    };
+                    match cfg_opt {
+                        None => {
+                            let _: Unit = drop_terminal(term);
+                            println("Quit.")
+                        },
+                        Some(cfg) => {
+                            let _: Bool = play(term, cfg);
+                            let _: Unit = drop_terminal(term);
+                            println("Thanks for playing!")
+                        },
+                    }
+                },
+            }
+        },
+    }
+}

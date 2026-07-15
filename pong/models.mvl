@@ -1,0 +1,151 @@
+// models.mvl — PURE domain types for pong.
+//
+// No effects, no extern, no I/O.  Every constraint that the prover will
+// discharge starts here as a refinement or invariant on a type.
+//
+// Demonstrates:
+//   1. Req 1  (Type Safety):   Field, Ball, Paddle, Game as struct types;
+//                              Mode, Palette, Difficulty, Side, GameStatus,
+//                              PaddleInput as enums — no primitive obsession
+//   2. Req 3  (Exhaustiveness): every enum is closed and matched exhaustively
+//                               in game.mvl / main.mvl
+//   3. Req 4  (Null):           GameStatus::Won(Side) uses payload variant;
+//                               Option[T] appears in game.mvl / input.mvl
+//   4. Req 7  (Effects):       zero effect annotations — this file is pure
+//   5. Req 8  (Termination):   all types; no fns here so trivially total
+//   6. Req 10 (Refinements):   field bounds on every position, velocity, score;
+//                              Paddle has a cross-field `with invariant`
+//   7. Req 11 (IFC):           LeftInput / RightInput labels + audit relabels
+//                              (see requirements.md §16)
+//
+// Assurance note: 0 extern blocks.
+
+// ── Field ──────────────────────────────────────────────────────────────────────
+
+/// Playfield dimensions.  Runtime-queried from the terminal at startup then
+/// frozen for the rest of the session — the refinements bound the range and
+/// the prover discharges them at construction sites.
+///
+/// The width/height bounds (20..120, 10..40) are repeated inline on Ball.x/y
+/// and Paddle.y.  Named aliases (`FieldCol`/`FieldRow`) would DRY these but
+/// require refined-int widening at comparison sites (`ball.y <= 0`) too —
+/// mvl-lang/mvl#1781 only widens at construction sites in 0.247.2.
+pub type Field = struct {
+    width:  Int where self >= 20 && self <= 120,
+    height: Int where self >= 10 && self <= 40,
+}
+
+// ── Ball ───────────────────────────────────────────────────────────────────────
+
+/// Ball position and velocity.
+///
+/// `vx` is non-zero (a ball with zero horizontal velocity would stall the
+/// game).  Magnitude is capped at 3 for the Medium / Hard difficulty
+/// speed-up policy; Simple keeps it at 1.
+///
+/// `vy` is a small angle — 0 (horizontal) or ±1.  Bounces off paddle
+/// corners may perturb it; a straight-line hit leaves it unchanged.
+pub type Ball = struct {
+    x:  Int where self >= 0 && self <= 120,
+    y:  Int where self >= 0 && self <= 40,
+    vx: Int where self >= -3 && self <= 3 && self != 0,
+    vy: Int where self >= -1 && self <= 1,
+}
+
+// ── Paddle ─────────────────────────────────────────────────────────────────────
+
+/// A vertical paddle at a fixed x-column (left or right edge).
+///
+/// `y` is the top of the paddle.  The struct invariant `y + height <= 40`
+/// combined with the per-field bounds proves the paddle always fits inside
+/// the maximum possible field — game.mvl narrows this to the current field.
+pub type Paddle = struct {
+    y:      Int where self >= 0 && self <= 40,
+    height: Int where self >= 2 && self <= 8,
+} with invariant self.y + self.height <= 40
+
+// ── Enums ──────────────────────────────────────────────────────────────────────
+
+/// Play mode.  Selected via menu or `--mode {single,two}`.
+pub type Mode = enum {
+    SinglePlayer,   // left = human, right = AI
+    TwoPlayer,      // left = human (W/S), right = human (↑/↓)
+}
+
+/// Visual palette.  Selected via menu or `--palette {bw,color}`.
+pub type Palette = enum {
+    BlackWhite,     // monochrome — everything Style::White
+    Color,          // left=Cyan, right=Magenta, ball=Yellow, borders=White
+}
+
+/// AI difficulty / ball speed policy.  Selected via menu or
+/// `--difficulty {simple,medium,hard}`.
+pub type Difficulty = enum {
+    Simple,   // |vx| stays at 1 forever
+    Medium,   // |vx| += 1 every 3 paddle bounces, capped at 3
+    Hard,     // |vx| += 1 every point scored,     capped at 3
+}
+
+/// Which side of the field.  Used for scoring, win detection, and the
+/// LeftInput / RightInput IFC labels.
+pub type Side = enum {
+    Left,
+    Right,
+}
+
+/// Game lifecycle status.  Playing → Won(Side).  No draw variant — first
+/// to `winning_score` (11) takes it.
+pub type GameStatus = enum {
+    Playing,
+    Won(Side),
+}
+
+/// A sanitized paddle-move directive.  Produced by `input.mvl::key_to_input`
+/// from a raw `Tainted[Key]`; consumed by `game.mvl` under a label.
+pub type PaddleInput = enum {
+    Up,
+    Down,
+}
+
+// ── Game ───────────────────────────────────────────────────────────────────────
+
+/// Full game state.  Passed by value through every `total fn` in game.mvl;
+/// the game loop in main.mvl threads it explicitly.
+///
+/// Score bounds match the winning score (11) — the prover uses this cap to
+/// discharge `check_win` obligations.
+///
+/// `rally_bounces` counts paddle bounces since the last point scored; the
+/// Medium difficulty policy uses it to decide when to speed up.
+pub type Game = struct {
+    field:         Field,
+    ball:          Ball,
+    left_paddle:   Paddle,
+    right_paddle:  Paddle,
+    left_score:    Int where self >= 0 && self <= 11,
+    right_score:   Int where self >= 0 && self <= 11,
+    rally_bounces: Int where self >= 0 && self <= 1000,
+    mode:          Mode,
+    difficulty:    Difficulty,
+    status:        GameStatus,
+}
+
+// ── Config ─────────────────────────────────────────────────────────────────────
+
+/// Parsed CLI + menu result.  Threaded into `new_game` in game.mvl.
+///
+/// `winning_score` is refined even though it is hard-coded to 11 today —
+/// the refinement lets `check_win` prove correctness for any future range.
+pub type Config = struct {
+    mode:          Mode,
+    palette:       Palette,
+    difficulty:    Difficulty,
+    winning_score: Int where self >= 1 && self <= 21,
+}
+
+// ── IFC labels ────────────────────────────────────────────────────────────────
+//
+// LeftInput / RightInput labels + relabels live in game.mvl.  The #1780/#1784
+// fixes improved cross-file label handling but the check still infers
+// `LeftInput[Paddle]` as the return type of a call to a plain-Paddle-returning
+// fn when the labeled arg crosses file boundaries.  Colocation avoids it.

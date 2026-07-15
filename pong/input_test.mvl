@@ -1,0 +1,206 @@
+// input_test.mvl — Unit tests for key mapping.
+//
+// Assurance note: 0 extern blocks.
+
+use pkg.tui.{Key, Direction}
+
+// ── Type re-declarations (test isolation, #96) ────────────────────────────────
+
+type PaddleInput = enum { Up, Down }
+
+// ── Function re-declarations (mirror input.mvl) ──────────────────────────────
+
+total fn key_to_left_input(k: Key) -> Option[PaddleInput] {
+    match k {
+        Key::Char(c) => if c == "w" || c == "W" {
+            Some(PaddleInput::Up)
+        } else if c == "s" || c == "S" {
+            Some(PaddleInput::Down)
+        } else {
+            None
+        },
+        Key::Enter     => None,
+        Key::Escape    => None,
+        Key::Arrow(_)  => None,
+        Key::Backspace => None,
+        Key::Delete    => None,
+        Key::Unknown   => None,
+    }
+}
+
+total fn key_to_right_input(k: Key) -> Option[PaddleInput] {
+    match k {
+        Key::Arrow(Direction::Up)    => Some(PaddleInput::Up),
+        Key::Arrow(Direction::Down)  => Some(PaddleInput::Down),
+        Key::Arrow(Direction::Left)  => None,
+        Key::Arrow(Direction::Right) => None,
+        Key::Char(_)                 => None,
+        Key::Enter                   => None,
+        Key::Escape                  => None,
+        Key::Backspace               => None,
+        Key::Delete                  => None,
+        Key::Unknown                 => None,
+    }
+}
+
+total fn is_quit_key(k: Key) -> Bool {
+    match k {
+        Key::Escape    => true,
+        Key::Char(c)   => c == "q" || c == "Q",
+        Key::Enter     => false,
+        Key::Arrow(_)  => false,
+        Key::Backspace => false,
+        Key::Delete    => false,
+        Key::Unknown   => false,
+    }
+}
+
+total fn is_commit_key(k: Key) -> Bool {
+    match k {
+        Key::Enter     => true,
+        Key::Char(c)   => c == " ",
+        Key::Escape    => false,
+        Key::Arrow(_)  => false,
+        Key::Backspace => false,
+        Key::Delete    => false,
+        Key::Unknown   => false,
+    }
+}
+
+// ── Helper: assert Some(x) ────────────────────────────────────────────────────
+
+total fn expect_some(opt: Option[PaddleInput], want: PaddleInput) -> Bool {
+    match opt {
+        Some(v) => match v {
+            PaddleInput::Up   => match want {
+                PaddleInput::Up   => true,
+                PaddleInput::Down => false,
+            },
+            PaddleInput::Down => match want {
+                PaddleInput::Up   => false,
+                PaddleInput::Down => true,
+            },
+        },
+        None => false,
+    }
+}
+
+total fn is_none(opt: Option[PaddleInput]) -> Bool {
+    match opt {
+        Some(_) => false,
+        None    => true,
+    }
+}
+
+// ── Tests: left player mapping ────────────────────────────────────────────────
+
+test fn test_left_w_maps_up() -> Unit {
+    assert_eq(expect_some(key_to_left_input(Key::Char("w")), PaddleInput::Up), true);
+}
+
+test fn test_left_W_maps_up() -> Unit {
+    assert_eq(expect_some(key_to_left_input(Key::Char("W")), PaddleInput::Up), true);
+}
+
+test fn test_left_s_maps_down() -> Unit {
+    assert_eq(expect_some(key_to_left_input(Key::Char("s")), PaddleInput::Down), true);
+}
+
+test fn test_left_arrow_up_returns_none() -> Unit {
+    assert_eq(is_none(key_to_left_input(Key::Arrow(Direction::Up))), true);
+}
+
+test fn test_left_unknown_key_returns_none() -> Unit {
+    assert_eq(is_none(key_to_left_input(Key::Char("x"))), true);
+}
+
+// ── Tests: right player mapping ───────────────────────────────────────────────
+
+test fn test_right_arrow_up_maps_up() -> Unit {
+    assert_eq(expect_some(key_to_right_input(Key::Arrow(Direction::Up)), PaddleInput::Up), true);
+}
+
+test fn test_right_arrow_down_maps_down() -> Unit {
+    assert_eq(expect_some(key_to_right_input(Key::Arrow(Direction::Down)), PaddleInput::Down), true);
+}
+
+test fn test_right_w_returns_none() -> Unit {
+    assert_eq(is_none(key_to_right_input(Key::Char("w"))), true);
+}
+
+test fn test_right_left_right_arrows_return_none() -> Unit {
+    assert_eq(is_none(key_to_right_input(Key::Arrow(Direction::Left))), true);
+    assert_eq(is_none(key_to_right_input(Key::Arrow(Direction::Right))), true);
+}
+
+// ── Tests: quit / commit keys ─────────────────────────────────────────────────
+
+test fn test_escape_is_quit() -> Unit {
+    assert_eq(is_quit_key(Key::Escape), true);
+}
+
+test fn test_q_is_quit() -> Unit {
+    assert_eq(is_quit_key(Key::Char("q")), true);
+    assert_eq(is_quit_key(Key::Char("Q")), true);
+}
+
+test fn test_letter_x_is_not_quit() -> Unit {
+    assert_eq(is_quit_key(Key::Char("x")), false);
+}
+
+test fn test_enter_is_commit() -> Unit {
+    assert_eq(is_commit_key(Key::Enter), true);
+}
+
+test fn test_space_is_commit() -> Unit {
+    assert_eq(is_commit_key(Key::Char(" ")), true);
+}
+
+test fn test_escape_is_not_commit() -> Unit {
+    assert_eq(is_commit_key(Key::Escape), false);
+}
+
+// ── Branch coverage: exercise every Key variant on every function ────────────
+
+test fn test_left_enter_none()     -> Unit { assert_eq(is_none(key_to_left_input(Key::Enter)),     true); }
+test fn test_left_escape_none()    -> Unit { assert_eq(is_none(key_to_left_input(Key::Escape)),    true); }
+test fn test_left_backspace_none() -> Unit { assert_eq(is_none(key_to_left_input(Key::Backspace)), true); }
+test fn test_left_delete_none()    -> Unit { assert_eq(is_none(key_to_left_input(Key::Delete)),    true); }
+test fn test_left_unknown_none()   -> Unit { assert_eq(is_none(key_to_left_input(Key::Unknown)),   true); }
+
+test fn test_right_char_none()      -> Unit { assert_eq(is_none(key_to_right_input(Key::Char("q"))),           true); }
+test fn test_right_enter_none()     -> Unit { assert_eq(is_none(key_to_right_input(Key::Enter)),               true); }
+test fn test_right_escape_none()    -> Unit { assert_eq(is_none(key_to_right_input(Key::Escape)),              true); }
+test fn test_right_left_none()      -> Unit { assert_eq(is_none(key_to_right_input(Key::Arrow(Direction::Left))),  true); }
+test fn test_right_right_arrow()    -> Unit { assert_eq(is_none(key_to_right_input(Key::Arrow(Direction::Right))), true); }
+test fn test_right_backspace_none() -> Unit { assert_eq(is_none(key_to_right_input(Key::Backspace)),           true); }
+test fn test_right_delete_none()    -> Unit { assert_eq(is_none(key_to_right_input(Key::Delete)),              true); }
+test fn test_right_unknown_none()   -> Unit { assert_eq(is_none(key_to_right_input(Key::Unknown)),             true); }
+
+test fn test_quit_enter_false()     -> Unit { assert_eq(is_quit_key(Key::Enter),                    false); }
+test fn test_quit_arrow_false()     -> Unit { assert_eq(is_quit_key(Key::Arrow(Direction::Up)),     false); }
+test fn test_quit_backspace_false() -> Unit { assert_eq(is_quit_key(Key::Backspace),                false); }
+test fn test_quit_delete_false()    -> Unit { assert_eq(is_quit_key(Key::Delete),                   false); }
+test fn test_quit_unknown_false()   -> Unit { assert_eq(is_quit_key(Key::Unknown),                  false); }
+
+test fn test_commit_arrow_false()     -> Unit { assert_eq(is_commit_key(Key::Arrow(Direction::Up)), false); }
+test fn test_commit_backspace_false() -> Unit { assert_eq(is_commit_key(Key::Backspace),            false); }
+test fn test_commit_delete_false()    -> Unit { assert_eq(is_commit_key(Key::Delete),               false); }
+test fn test_commit_unknown_false()   -> Unit { assert_eq(is_commit_key(Key::Unknown),              false); }
+test fn test_commit_letter_false()    -> Unit { assert_eq(is_commit_key(Key::Char("x")),            false); }
+
+test fn test_expect_some_down_match() -> Unit {
+    assert_eq(expect_some(Some(PaddleInput::Down), PaddleInput::Down), true);
+}
+test fn test_expect_some_up_want_down() -> Unit {
+    assert_eq(expect_some(Some(PaddleInput::Up), PaddleInput::Down), false);
+}
+test fn test_expect_some_down_want_up() -> Unit {
+    assert_eq(expect_some(Some(PaddleInput::Down), PaddleInput::Up), false);
+}
+test fn test_expect_some_none() -> Unit {
+    assert_eq(expect_some(None, PaddleInput::Up), false);
+}
+test fn test_is_none_some_returns_false() -> Unit {
+    assert_eq(is_none(Some(PaddleInput::Up)), false);
+}

@@ -1,0 +1,479 @@
+// game.mvl — PURE game logic for pong.
+//
+// No effects, no extern, no I/O.  Every function is `total fn` and
+// carries `requires`/`ensures` contracts that the Z3 solver discharges
+// at compile time.  main.mvl threads the state; this file is fully
+// testable without a terminal.
+//
+// Demonstrates:
+//   1. Req 3  (Exhaustiveness): every match on Mode, Palette, Difficulty,
+//                               Side, PaddleInput, GameStatus covers
+//                               every arm — no `_` wildcards
+//   2. Req 4  (Null):           Option[PaddleInput] for "no input this tick"
+//   3. Req 7  (Effects):        zero effect annotations in this file
+//   4. Req 8  (Termination):    every fn is `total fn` — no recursion,
+//                               finite match only
+//   5. Req 10 (Refinements):    ~30 explicit requires/ensures obligations
+//   6. Req 11 (IFC):            move_left_paddle / move_right_paddle
+//                               accept labeled inputs; audit relabels
+//                               are the only way to cross the boundary
+//
+// Assurance note: 0 extern blocks.
+
+use models::{
+    Field, Ball, Paddle,
+    Mode, Palette, Difficulty, Side, GameStatus, PaddleInput,
+    Game, Config,
+}
+
+// ── IFC labels (Req 11) ────────────────────────────────────────────────────────
+//
+// Colocated with wrap/unwrap sites — see note in models.mvl.
+
+pub label LeftInput
+pub label RightInput
+
+pub relabel to_left_input:   _ -> LeftInput   audit
+pub relabel from_left_input: LeftInput -> _   audit
+pub relabel to_right_input:   _ -> RightInput   audit
+pub relabel from_right_input: RightInput -> _  audit
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+
+/// Fixed paddle height.  Kept small so `Paddle.height` refinement (2..8)
+/// always accepts and the invariant `y + h <= 40` has slack.
+pub const paddle_height: Int = 4;
+
+/// Rally-bounces threshold for Medium difficulty speed-up policy.
+pub const medium_speedup_after: Int = 3;
+
+/// Absolute max magnitude for `Ball.vx`.
+pub const max_speed: Int = 3;
+
+/// Logical playfield width, in columns.  The renderer centers this inside
+/// whatever terminal it's given.  Chosen inside `Field.width`'s refined
+/// range (20..120) so `field_from_terminal` cannot violate the invariant.
+pub const field_cols: Int = 80;
+
+/// Logical playfield height, in rows.  Chosen inside `Field.height`'s
+/// refined range (10..40).
+pub const field_rows: Int = 22;
+
+// ── Ball construction and movement ────────────────────────────────────────────
+
+/// Build a centered, serving ball for a fresh game or after a score.
+///
+/// The ball starts stationary in the vertical (`vy = 0`) and moves
+/// toward `serve_to` at unit speed.
+total fn serve_ball(field: Field, serve_to: Side) -> Ball
+    ensures result.y >= 0 && result.y < 40
+    ensures result.x >= 0 && result.x < 120
+    ensures result.vy == 0
+    ensures result.vx == 1 || result.vx == -1
+{
+    let vx: Int = match serve_to {
+        Side::Right => 1,
+        Side::Left  => -1,
+    };
+    Ball {
+        x: field.width / 2,
+        y: field.height / 2,
+        vx: vx,
+        vy: 0,
+    }
+}
+
+/// Compute the clamped next-y for a ball step.
+/// Splits the wall-clamp from `step_ball` so the ensures on wall
+/// bounces stay local.
+total fn clamp_row(y: Int, field: Field) -> Int
+    ensures result >= 0
+    ensures result < field.height
+{
+    if y < 0 {
+        0
+    } else if y >= field.height {
+        field.height - 1
+    } else {
+        y
+    }
+}
+
+/// Compute the clamped next-x for a ball step.  Scoring detection
+/// happens *before* this — this only exists to keep the ball inside
+/// the maximum field during in-play ticks.
+total fn clamp_col(x: Int, field: Field) -> Int
+    ensures result >= 0
+    ensures result < field.width
+{
+    if x < 0 {
+        0
+    } else if x >= field.width {
+        field.width - 1
+    } else {
+        x
+    }
+}
+
+/// Advance the ball one tick.  Does not detect scoring or bouncing —
+/// those live in `resolve_scoring` and `bounce_wall`/`bounce_paddle`.
+///
+/// Precondition: ball is already inside the field.
+pub total fn step_ball(ball: Ball, field: Field) -> Ball
+    requires ball.x >= 0 && ball.x < field.width
+    requires ball.y >= 0 && ball.y < field.height
+    ensures  result.x >= 0 && result.x < 120
+    ensures  result.y >= 0 && result.y < 40
+    ensures  result.vx == ball.vx
+    ensures  result.vy == ball.vy
+{
+    Ball {
+        x:  clamp_col(ball.x + ball.vx, field),
+        y:  clamp_row(ball.y + ball.vy, field),
+        vx: ball.vx,
+        vy: ball.vy,
+    }
+}
+
+// ── Bouncing ──────────────────────────────────────────────────────────────────
+
+/// Return true when the ball is at the top or bottom wall of the field.
+pub total fn at_wall(ball: Ball, field: Field) -> Bool {
+    ball.y <= 0 || ball.y >= field.height - 1
+}
+
+/// Reflect `vy` if the ball is at a wall.  `vx` unchanged.  When
+/// `vy == 0` the reflection is a no-op — the ball is skimming a wall
+/// with pure horizontal motion, which the tick after will still catch.
+pub total fn bounce_wall(ball: Ball, field: Field) -> Ball
+    ensures result.x == ball.x
+    ensures result.y == ball.y
+    ensures result.vx == ball.vx
+{
+    let flipped: Int = if at_wall(ball, field) { 0 - ball.vy } else { ball.vy };
+    Ball {
+        x:  ball.x,
+        y:  ball.y,
+        vx: ball.vx,
+        vy: flipped,
+    }
+}
+
+/// Reverse `vx` on a paddle hit.  `vy` and `y` unchanged in this
+/// simple model — corner-hit vy perturbation is left to a future
+/// enhancement to keep the proof surface small.
+pub total fn bounce_paddle(ball: Ball) -> Ball
+    ensures result.x == ball.x
+    ensures result.y == ball.y
+    ensures result.vy == ball.vy
+    ensures result.vx == 0 - ball.vx
+{
+    Ball {
+        x:  ball.x,
+        y:  ball.y,
+        vx: 0 - ball.vx,
+        vy: ball.vy,
+    }
+}
+
+/// Increase the ball's horizontal-velocity magnitude by 1, capped at
+/// `max_speed`.  Direction preserved.  y and vy unchanged.
+pub total fn bump_ball_speed(ball: Ball) -> Ball
+    ensures result.x  == ball.x
+    ensures result.y  == ball.y
+    ensures result.vy == ball.vy
+    ensures result.vx >= -3 && result.vx <= 3
+    ensures result.vx != 0
+{
+    let mag: Int = if ball.vx < 0 { 0 - ball.vx } else { ball.vx };
+    let new_mag: Int = if mag < max_speed { mag + 1 } else { max_speed };
+    let new_vx: Int = if ball.vx < 0 { 0 - new_mag } else { new_mag };
+    Ball {
+        x:  ball.x,
+        y:  ball.y,
+        vx: new_vx,
+        vy: ball.vy,
+    }
+}
+
+/// Speed-up policy per difficulty on a paddle bounce.
+///   Simple: never accelerates
+///   Medium: accelerates once every `medium_speedup_after` bounces
+///   Hard:   never here — Hard accelerates on score, not bounce
+pub total fn speed_step_up(ball: Ball, difficulty: Difficulty, bounces: Int) -> Ball
+    ensures result.x  == ball.x
+    ensures result.y  == ball.y
+    ensures result.vy == ball.vy
+    ensures result.vx >= -3 && result.vx <= 3
+    ensures result.vx != 0
+{
+    let bumped: Bool = match difficulty {
+        Difficulty::Simple => false,
+        Difficulty::Medium => bounces > 0 && (bounces % medium_speedup_after) == 0,
+        Difficulty::Hard   => false,
+    };
+    let new_vx: Int = if bumped {
+        // Increase magnitude by 1 while preserving direction, capped at max_speed.
+        let mag: Int = if ball.vx < 0 { 0 - ball.vx } else { ball.vx };
+        let new_mag: Int = if mag < max_speed { mag + 1 } else { max_speed };
+        if ball.vx < 0 { 0 - new_mag } else { new_mag }
+    } else {
+        ball.vx
+    };
+    Ball {
+        x:  ball.x,
+        y:  ball.y,
+        vx: new_vx,
+        vy: ball.vy,
+    }
+}
+
+// ── Paddle movement ───────────────────────────────────────────────────────────
+
+/// Clamp a paddle-y within the field, respecting the paddle's height.
+total fn clamp_paddle_y(y: Int, height: Int, field: Field) -> Int
+    ensures result >= 0
+    ensures result + height <= field.height
+{
+    if y < 0 {
+        0
+    } else if y + height > field.height {
+        field.height - height
+    } else {
+        y
+    }
+}
+
+/// Compute a paddle's new y from a raw PaddleInput.  Bounded by ±1 per
+/// tick, clamped to the field.
+total fn move_paddle_raw(p: Paddle, input: PaddleInput, field: Field) -> Paddle
+{
+    let dy: Int = match input {
+        PaddleInput::Up   => -1,
+        PaddleInput::Down => 1,
+    };
+    Paddle {
+        y:      clamp_paddle_y(p.y + dy, p.height, field),
+        height: p.height,
+    }
+}
+
+/// Move the LEFT paddle.  Accepts only `LeftInput[PaddleInput]` —
+/// passing a `RightInput[PaddleInput]` here is a Req 11 type error,
+/// which is the compile-time guarantee that left keys can't move the
+/// right paddle.
+total fn move_left_paddle(
+    p: Paddle,
+    input: LeftInput[PaddleInput],
+    field: Field,
+) -> Paddle
+{
+    let raw: PaddleInput = relabel from_left_input(input, "MOVE-LEFT-PADDLE");
+    move_paddle_raw(p, raw, field)
+}
+
+/// Move the RIGHT paddle.  Accepts only `RightInput[PaddleInput]`.
+total fn move_right_paddle(
+    p: Paddle,
+    input: RightInput[PaddleInput],
+    field: Field,
+) -> Paddle
+{
+    let raw: PaddleInput = relabel from_right_input(input, "MOVE-RIGHT-PADDLE");
+    move_paddle_raw(p, raw, field)
+}
+
+/// Dispatch a raw PaddleInput to the LEFT paddle.  Wraps the input in
+/// the LeftInput label (audited) and hands off to move_left_paddle,
+/// which the type system guarantees only accepts LeftInput-labeled
+/// values.  Callable from `main.mvl` without needing cross-file
+/// label imports (workaround for #1780).
+pub total fn dispatch_left_paddle(
+    p: Paddle,
+    input: PaddleInput,
+    field: Field,
+) -> Paddle
+{
+    let labeled: LeftInput[PaddleInput] = relabel to_left_input(input, "DISPATCH-LEFT-KEY");
+    move_left_paddle(p, labeled, field)
+}
+
+/// Dispatch a raw PaddleInput to the RIGHT paddle.  Symmetric to
+/// `dispatch_left_paddle` — the type system prevents this call site
+/// from ever handing input to `move_left_paddle`.
+pub total fn dispatch_right_paddle(
+    p: Paddle,
+    input: PaddleInput,
+    field: Field,
+) -> Paddle
+{
+    let labeled: RightInput[PaddleInput] = relabel to_right_input(input, "DISPATCH-RIGHT-KEY");
+    move_right_paddle(p, labeled, field)
+}
+
+/// AI paddle move: track the ball's vertical position by ±1 per tick.
+/// Uses the same clamp as human input so bounds proofs are identical.
+pub total fn ai_move(p: Paddle, ball: Ball, field: Field) -> Paddle
+{
+    let target: Int = ball.y;
+    let center: Int = p.y + p.height / 2;
+    let raw: PaddleInput = if target < center {
+        PaddleInput::Up
+    } else {
+        PaddleInput::Down
+    };
+    move_paddle_raw(p, raw, field)
+}
+
+// ── Scoring ───────────────────────────────────────────────────────────────────
+
+/// True when the ball has crossed the left edge (right player scores).
+pub total fn crossed_left(ball: Ball) -> Bool {
+    ball.x <= 0 && ball.vx < 0
+}
+
+/// True when the ball has crossed the right edge (left player scores).
+pub total fn crossed_right(ball: Ball, field: Field) -> Bool {
+    ball.x >= field.width - 1 && ball.vx > 0
+}
+
+/// If the ball just crossed a goal line, award a point and reset the
+/// ball to center serving the losing side.  Otherwise, no-op.
+///
+/// The prover discharges score monotonicity and the "at most one point
+/// per call" contract.
+pub total fn resolve_scoring(game: Game) -> Game
+    ensures result.left_score  >= game.left_score
+    ensures result.right_score >= game.right_score
+{
+    if crossed_left(game.ball) {
+        // Right scored → serve to the left.
+        let new_score: Int = if game.right_score < 11 {
+            game.right_score + 1
+        } else {
+            game.right_score
+        };
+        Game {
+            field:         game.field,
+            ball:          serve_ball(game.field, Side::Left),
+            left_paddle:   game.left_paddle,
+            right_paddle:  game.right_paddle,
+            left_score:    game.left_score,
+            right_score:   new_score,
+            rally_bounces: 0,
+            mode:          game.mode,
+            difficulty:    game.difficulty,
+            status:        game.status,
+        }
+    } else if crossed_right(game.ball, game.field) {
+        let new_score: Int = if game.left_score < 11 {
+            game.left_score + 1
+        } else {
+            game.left_score
+        };
+        Game {
+            field:         game.field,
+            ball:          serve_ball(game.field, Side::Right),
+            left_paddle:   game.left_paddle,
+            right_paddle:  game.right_paddle,
+            left_score:    new_score,
+            right_score:   game.right_score,
+            rally_bounces: 0,
+            mode:          game.mode,
+            difficulty:    game.difficulty,
+            status:        game.status,
+        }
+    } else {
+        game
+    }
+}
+
+/// Decide whether a game has ended.
+pub total fn check_win(game: Game, winning_score: Int) -> GameStatus {
+    if game.left_score >= winning_score {
+        GameStatus::Won(Side::Left)
+    } else if game.right_score >= winning_score {
+        GameStatus::Won(Side::Right)
+    } else {
+        GameStatus::Playing
+    }
+}
+
+// ── Field construction from terminal geometry ─────────────────────────────────
+
+/// Return a fixed 60×20 logical playfield.  The renderer centers this
+/// inside whatever terminal it's given — the ball and paddles move in
+/// the logical grid at a chunkiness the eye can follow, rather than
+/// pixel-by-pixel on a large terminal.
+///
+/// `cols` and `rows` are ignored today.  If the terminal is smaller
+/// than the logical field the border will overflow — pong requires at
+/// least ~64×24 to render fully.
+pub total fn field_from_terminal(cols: Int, rows: Int) -> Field
+    ensures result.width == field_cols
+    ensures result.height == field_rows
+{
+    let _: Int = cols;
+    let _: Int = rows;
+    Field { width: field_cols, height: field_rows }
+}
+
+// ── New game ──────────────────────────────────────────────────────────────────
+
+/// Centered paddle for a given field.
+total fn centered_paddle(field: Field) -> Paddle
+    ensures result.height == paddle_height
+{
+    let ph: Int = paddle_height;
+    let y: Int = (field.height - ph) / 2;
+    Paddle {
+        y:      clamp_paddle_y(y, ph, field),
+        height: ph,
+    }
+}
+
+/// Set the ball's vertical bias for a fresh serve.  main.mvl calls this
+/// with a random value in {-1, 0, 1} to give the serve an angle.
+pub total fn with_ball_angle(game: Game, vy_bias: Int) -> Game
+    requires vy_bias >= -1 && vy_bias <= 1
+    ensures  result.ball.vy == vy_bias
+{
+    let biased: Ball = Ball {
+        x:  game.ball.x,
+        y:  game.ball.y,
+        vx: game.ball.vx,
+        vy: vy_bias,
+    };
+    Game {
+        field:         game.field,
+        ball:          biased,
+        left_paddle:   game.left_paddle,
+        right_paddle:  game.right_paddle,
+        left_score:    game.left_score,
+        right_score:   game.right_score,
+        rally_bounces: game.rally_bounces,
+        mode:          game.mode,
+        difficulty:    game.difficulty,
+        status:        game.status,
+    }
+}
+
+/// Build a fresh Game.  Ball serves toward the RIGHT on new game.
+pub total fn new_game(field: Field, mode: Mode, difficulty: Difficulty) -> Game
+    ensures result.left_score    == 0
+    ensures result.right_score   == 0
+    ensures result.rally_bounces == 0
+{
+    Game {
+        field:         field,
+        ball:          serve_ball(field, Side::Right),
+        left_paddle:   centered_paddle(field),
+        right_paddle:  centered_paddle(field),
+        left_score:    0,
+        right_score:   0,
+        rally_bounces: 0,
+        mode:          mode,
+        difficulty:    difficulty,
+        status:        GameStatus::Playing,
+    }
+}

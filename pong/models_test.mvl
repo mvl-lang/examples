@@ -1,0 +1,173 @@
+// models_test.mvl — Unit tests for domain type construction.
+//
+// Verifies that every refinement and struct invariant declared in
+// models.mvl accepts the values game.mvl and main.mvl will use.  The
+// prover discharges these at compile time; the tests double as
+// executable examples.
+//
+// Type declarations are re-stated locally because the per-file test
+// checker doesn't resolve `use models::...` yet (#96 — same convention
+// as crud_api/handlers_test.mvl and snake_game/game_test.mvl).
+//
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations ──────────────────────────────────────────────────────
+
+type Field = struct {
+    width:  Int where self >= 20 && self <= 120,
+    height: Int where self >= 10 && self <= 40,
+}
+
+type Ball = struct {
+    x:  Int where self >= 0 && self <= 120,
+    y:  Int where self >= 0 && self <= 40,
+    vx: Int where self >= -3 && self <= 3 && self != 0,
+    vy: Int where self >= -1 && self <= 1,
+}
+
+type Paddle = struct {
+    y:      Int where self >= 0 && self <= 40,
+    height: Int where self >= 2 && self <= 8,
+} with invariant self.y + self.height <= 40
+
+type Mode = enum { SinglePlayer, TwoPlayer }
+type Palette = enum { BlackWhite, Color }
+type Difficulty = enum { Simple, Medium, Hard }
+type Side = enum { Left, Right }
+type GameStatus = enum { Playing, Won(Side) }
+type PaddleInput = enum { Up, Down }
+
+// ── Field: boundary construction ──────────────────────────────────────────────
+
+test fn test_field_min_bounds() -> Unit {
+    let f: Field = Field { width: 20, height: 10 };
+    assert_eq(f.width, 20);
+    assert_eq(f.height, 10);
+}
+
+test fn test_field_max_bounds() -> Unit {
+    let f: Field = Field { width: 120, height: 40 };
+    assert_eq(f.width, 120);
+    assert_eq(f.height, 40);
+}
+
+test fn test_field_typical() -> Unit {
+    let f: Field = Field { width: 80, height: 24 };
+    assert_eq(f.width, 80);
+    assert_eq(f.height, 24);
+}
+
+// ── Ball: signed velocities (exercises the #1777 fix) ─────────────────────────
+
+test fn test_ball_positive_velocities() -> Unit {
+    let b: Ball = Ball { x: 40, y: 12, vx: 1, vy: 0 };
+    assert_eq(b.vx, 1);
+    assert_eq(b.vy, 0);
+}
+
+test fn test_ball_negative_velocities() -> Unit {
+    let b: Ball = Ball { x: 40, y: 12, vx: -3, vy: -1 };
+    assert_eq(b.vx, -3);
+    assert_eq(b.vy, -1);
+}
+
+test fn test_ball_max_speed() -> Unit {
+    let b: Ball = Ball { x: 60, y: 20, vx: 3, vy: 1 };
+    assert_eq(b.vx, 3);
+    assert_eq(b.vy, 1);
+}
+
+// ── Paddle: invariant construction (y + height <= 40) ────────────────────────
+
+test fn test_paddle_top() -> Unit {
+    let p: Paddle = Paddle { y: 0, height: 4 };
+    assert_eq(p.y, 0);
+    assert_eq(p.height, 4);
+}
+
+test fn test_paddle_bottom_edge() -> Unit {
+    // y + height = 40 (invariant boundary — must be exactly satisfiable)
+    let p: Paddle = Paddle { y: 32, height: 8 };
+    assert_eq(p.y, 32);
+    assert_eq(p.height, 8);
+}
+
+test fn test_paddle_centered() -> Unit {
+    let p: Paddle = Paddle { y: 18, height: 4 };
+    assert_eq(p.y, 18);
+    assert_eq(p.height, 4);
+}
+
+// ── Enums: exhaustive match (Req 3) ──────────────────────────────────────────
+
+total fn mode_name(m: Mode) -> String {
+    match m {
+        Mode::SinglePlayer => "single",
+        Mode::TwoPlayer    => "two",
+    }
+}
+
+test fn test_mode_exhaustive() -> Unit {
+    assert_eq(mode_name(Mode::SinglePlayer), "single");
+    assert_eq(mode_name(Mode::TwoPlayer),    "two");
+}
+
+total fn palette_name(p: Palette) -> String {
+    match p {
+        Palette::BlackWhite => "bw",
+        Palette::Color      => "color",
+    }
+}
+
+test fn test_palette_exhaustive() -> Unit {
+    assert_eq(palette_name(Palette::BlackWhite), "bw");
+    assert_eq(palette_name(Palette::Color),      "color");
+}
+
+total fn difficulty_name(d: Difficulty) -> String {
+    match d {
+        Difficulty::Simple => "simple",
+        Difficulty::Medium => "medium",
+        Difficulty::Hard   => "hard",
+    }
+}
+
+test fn test_difficulty_exhaustive() -> Unit {
+    assert_eq(difficulty_name(Difficulty::Simple), "simple");
+    assert_eq(difficulty_name(Difficulty::Medium), "medium");
+    assert_eq(difficulty_name(Difficulty::Hard),   "hard");
+}
+
+total fn paddle_input_name(i: PaddleInput) -> String {
+    match i {
+        PaddleInput::Up   => "up",
+        PaddleInput::Down => "down",
+    }
+}
+
+test fn test_paddle_input_exhaustive() -> Unit {
+    assert_eq(paddle_input_name(PaddleInput::Up),   "up");
+    assert_eq(paddle_input_name(PaddleInput::Down), "down");
+}
+
+// ── GameStatus: payload variant + exhaustive match (Req 3 + Req 4) ────────────
+
+total fn status_summary(s: GameStatus) -> String {
+    match s {
+        GameStatus::Playing         => "playing",
+        GameStatus::Won(Side::Left)  => "left-won",
+        GameStatus::Won(Side::Right) => "right-won",
+    }
+}
+
+test fn test_status_playing() -> Unit {
+    assert_eq(status_summary(GameStatus::Playing), "playing");
+}
+
+test fn test_status_won_left() -> Unit {
+    assert_eq(status_summary(GameStatus::Won(Side::Left)), "left-won");
+}
+
+test fn test_status_won_right() -> Unit {
+    assert_eq(status_summary(GameStatus::Won(Side::Right)), "right-won");
+}
