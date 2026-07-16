@@ -31,7 +31,7 @@ use models::{
 use game::{
     new_game, serve_ball, step_ball, bounce_wall, bounce_paddle,
     at_wall, speed_step_up, bump_ball_speed, ai_move, resolve_scoring, check_win,
-    field_from_terminal, paddle_height,
+    field_from_terminal, PADDLE_HEIGHT,
     dispatch_left_paddle, dispatch_right_paddle,
     with_ball_angle,
 }
@@ -383,7 +383,7 @@ partial fn game_loop(
         game = game_tick(game, key_opt);
         // If someone just scored, apply a fresh random angle so every
         // serve starts on a slope.  Also bump ball speed on Hard mode —
-        // Hard accelerates once per point, capped at max_speed.
+        // Hard accelerates once per point, capped at MAX_SPEED.
         if game.left_score > prev_left || game.right_score > prev_right {
             let bias: Int = random_angle();
             game = with_ball_angle(game, bias);
