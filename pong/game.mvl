@@ -42,22 +42,22 @@ pub relabel from_right_input: RightInput -> _  audit
 
 /// Fixed paddle height.  Kept small so `Paddle.height` refinement (2..8)
 /// always accepts and the invariant `y + h <= 40` has slack.
-pub const paddle_height: Int = 4;
+pub const PADDLE_HEIGHT: Int = 4;
 
 /// Rally-bounces threshold for Medium difficulty speed-up policy.
-pub const medium_speedup_after: Int = 3;
+pub const MEDIUM_SPEEDUP_AFTER: Int = 3;
 
 /// Absolute max magnitude for `Ball.vx`.
-pub const max_speed: Int = 3;
+pub const MAX_SPEED: Int = 3;
 
 /// Logical playfield width, in columns.  The renderer centers this inside
 /// whatever terminal it's given.  Chosen inside `Field.width`'s refined
 /// range (20..120) so `field_from_terminal` cannot violate the invariant.
-pub const field_cols: Int = 80;
+pub const FIELD_COLS: Int = 80;
 
 /// Logical playfield height, in rows.  Chosen inside `Field.height`'s
 /// refined range (10..40).
-pub const field_rows: Int = 22;
+pub const FIELD_ROWS: Int = 22;
 
 // ── Ball construction and movement ────────────────────────────────────────────
 
@@ -177,7 +177,7 @@ pub total fn bounce_paddle(ball: Ball) -> Ball
 }
 
 /// Increase the ball's horizontal-velocity magnitude by 1, capped at
-/// `max_speed`.  Direction preserved.  y and vy unchanged.
+/// `MAX_SPEED`.  Direction preserved.  y and vy unchanged.
 pub total fn bump_ball_speed(ball: Ball) -> Ball
     ensures result.x  == ball.x
     ensures result.y  == ball.y
@@ -186,7 +186,7 @@ pub total fn bump_ball_speed(ball: Ball) -> Ball
     ensures result.vx != 0
 {
     let mag: Int = if ball.vx < 0 { 0 - ball.vx } else { ball.vx };
-    let new_mag: Int = if mag < max_speed { mag + 1 } else { max_speed };
+    let new_mag: Int = if mag < MAX_SPEED { mag + 1 } else { MAX_SPEED };
     let new_vx: Int = if ball.vx < 0 { 0 - new_mag } else { new_mag };
     Ball {
         x:  ball.x,
@@ -198,7 +198,7 @@ pub total fn bump_ball_speed(ball: Ball) -> Ball
 
 /// Speed-up policy per difficulty on a paddle bounce.
 ///   Simple: never accelerates
-///   Medium: accelerates once every `medium_speedup_after` bounces
+///   Medium: accelerates once every `MEDIUM_SPEEDUP_AFTER` bounces
 ///   Hard:   never here — Hard accelerates on score, not bounce
 pub total fn speed_step_up(ball: Ball, difficulty: Difficulty, bounces: Int) -> Ball
     ensures result.x  == ball.x
@@ -209,13 +209,13 @@ pub total fn speed_step_up(ball: Ball, difficulty: Difficulty, bounces: Int) -> 
 {
     let bumped: Bool = match difficulty {
         Difficulty::Simple => false,
-        Difficulty::Medium => bounces > 0 && (bounces % medium_speedup_after) == 0,
+        Difficulty::Medium => bounces > 0 && (bounces % MEDIUM_SPEEDUP_AFTER) == 0,
         Difficulty::Hard   => false,
     };
     let new_vx: Int = if bumped {
-        // Increase magnitude by 1 while preserving direction, capped at max_speed.
+        // Increase magnitude by 1 while preserving direction, capped at MAX_SPEED.
         let mag: Int = if ball.vx < 0 { 0 - ball.vx } else { ball.vx };
-        let new_mag: Int = if mag < max_speed { mag + 1 } else { max_speed };
+        let new_mag: Int = if mag < MAX_SPEED { mag + 1 } else { MAX_SPEED };
         if ball.vx < 0 { 0 - new_mag } else { new_mag }
     } else {
         ball.vx
@@ -410,21 +410,21 @@ pub total fn check_win(game: Game, winning_score: Int) -> GameStatus {
 /// than the logical field the border will overflow — pong requires at
 /// least ~64×24 to render fully.
 pub total fn field_from_terminal(cols: Int, rows: Int) -> Field
-    ensures result.width == field_cols
-    ensures result.height == field_rows
+    ensures result.width == FIELD_COLS
+    ensures result.height == FIELD_ROWS
 {
     let _: Int = cols;
     let _: Int = rows;
-    Field { width: field_cols, height: field_rows }
+    Field { width: FIELD_COLS, height: FIELD_ROWS }
 }
 
 // ── New game ──────────────────────────────────────────────────────────────────
 
 /// Centered paddle for a given field.
 total fn centered_paddle(field: Field) -> Paddle
-    ensures result.height == paddle_height
+    ensures result.height == PADDLE_HEIGHT
 {
-    let ph: Int = paddle_height;
+    let ph: Int = PADDLE_HEIGHT;
     let y: Int = (field.height - ph) / 2;
     Paddle {
         y:      clamp_paddle_y(y, ph, field),
