@@ -427,15 +427,20 @@ partial fn draw_menu(
     let d_prefix: String = if sel == 1 { "▶ " } else { "  " };
     let l_prefix: String = if sel == 2 { "▶ " } else { "  " };
     let _: Unit = put(term, 5, 4, "║                                  ║", s);
+    // Interior width = 34.  Each option row is:
+    //   ║ + 2 leading + prefix(2) + label(13) + value + trailing + ║
+    // Palette and Difficulty have value=6 chars ("Color "/"Normal") →
+    //   trailing = 34 - 2 - 2 - 13 - 6 = 11 spaces before the closing ║.
+    // Start level has value=2 chars → trailing = 15 spaces.
     let _: Unit = put(term, 6, 4,
         "║  ".concat(p_prefix).concat("Palette:     ")
-            .concat(palette_label(cfg.palette)).concat("   ║"), s);
+            .concat(palette_label(cfg.palette)).concat("           ║"), s);
     let _: Unit = put(term, 7, 4,
         "║  ".concat(d_prefix).concat("Difficulty:  ")
-            .concat(difficulty_label(cfg.difficulty)).concat("   ║"), s);
+            .concat(difficulty_label(cfg.difficulty)).concat("           ║"), s);
     let _: Unit = put(term, 8, 4,
         "║  ".concat(l_prefix).concat("Start level: ")
-            .concat(pad_number(cfg.start_level, 2)).concat("       ║"), s);
+            .concat(pad_number(cfg.start_level, 2)).concat("               ║"), s);
     let _: Unit = put(term, 9,  4, "║                                  ║", s);
     let _: Unit = put(term, 10, 4, "║  ↑↓ move  ←→ cycle  ⏎ start      ║", s);
     put(term, 11, 4, "╚══════════════════════════════════╝", s)

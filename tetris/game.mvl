@@ -739,8 +739,15 @@ pub total fn is_game_over(board: Board, piece: Piece) -> Bool {
 
 /// Fisher–Yates step: linear-congruential pseudo-random Int in a
 /// stable, small range.  Used only inside `refill_bag`.
+///
+/// The 24-bit cap on the incoming state prevents i64 overflow during
+/// the multiplication: `2^24 × 1103515245 ≈ 1.85e16 < 2^63`.  Without
+/// the cap, chained calls (`lcg_step(lcg_step(...))`) reach values
+/// large enough to panic on `checked_mul` in Rust debug builds.
 total fn lcg_step(seed: Int) -> Int {
-    let mixed: Int = seed * 1103515245 + 12345;
+    let s: Int = if seed < 0 { 0 - seed } else { seed };
+    let bounded: Int = s % 16777216;
+    let mixed: Int = bounded * 1103515245 + 12345;
     let masked: Int = mixed / 65536;
     if masked < 0 { 0 - masked } else { masked }
 }
