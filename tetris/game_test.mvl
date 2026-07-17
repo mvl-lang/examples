@@ -1,19 +1,13 @@
 // game_test.mvl — Unit tests for pure game logic.
 //
 // Exercises SRS rotation, movement, line clearing, scoring, gravity,
-// and game-over without a terminal.
-//
-// Hybrid style: legacy tests use locally-redeclared helpers
-// (cell_collides_test, gravity_ms_test, etc.) — these were written
-// before we imported the real fns.  Newer table-completeness tests
-// (piece_cells / kick_offsets / gameboy_ms_at_level) invoke the
-// production fns via `use game::...` so their branches count for
-// coverage.
+// and game-over without a terminal.  Uses locally-redeclared helpers
+// (cell_collides_test, gravity_ms_test, piece_cells_local etc.)
+// rather than `use game::...` — a cross-module import would break
+// `mvl mcdc`, which (unlike `mvl test`) does not load sibling source
+// modules as a prelude.  Filed as an mvl-lang/mvl issue.
 //
 // Assurance note: 0 extern blocks.
-
-use models::{Difficulty as ModelDifficulty}
-use game::{piece_cells, kick_offsets, gameboy_ms_at_level}
 
 // ── Type re-declarations ──────────────────────────────────────────────────────
 
@@ -268,114 +262,6 @@ test fn test_i_r0_has_four_cells() -> Unit {
 
 test fn test_o_has_four_cells() -> Unit {
     assert_eq(o_cells_test().len(), 4);
-}
-
-// ── piece_cells table completeness (replaces compile-time exhaustiveness) ────
-
-test fn test_piece_cells_i_all_rotations() -> Unit {
-    assert_eq(piece_cells(Shape::I, Rotation::R0  ).len(), 4);
-    assert_eq(piece_cells(Shape::I, Rotation::R90 ).len(), 4);
-    assert_eq(piece_cells(Shape::I, Rotation::R180).len(), 4);
-    assert_eq(piece_cells(Shape::I, Rotation::R270).len(), 4);
-}
-
-test fn test_piece_cells_o_all_rotations() -> Unit {
-    assert_eq(piece_cells(Shape::O, Rotation::R0  ).len(), 4);
-    assert_eq(piece_cells(Shape::O, Rotation::R90 ).len(), 4);
-    assert_eq(piece_cells(Shape::O, Rotation::R180).len(), 4);
-    assert_eq(piece_cells(Shape::O, Rotation::R270).len(), 4);
-}
-
-test fn test_piece_cells_t_all_rotations() -> Unit {
-    assert_eq(piece_cells(Shape::T, Rotation::R0  ).len(), 4);
-    assert_eq(piece_cells(Shape::T, Rotation::R90 ).len(), 4);
-    assert_eq(piece_cells(Shape::T, Rotation::R180).len(), 4);
-    assert_eq(piece_cells(Shape::T, Rotation::R270).len(), 4);
-}
-
-test fn test_piece_cells_s_all_rotations() -> Unit {
-    assert_eq(piece_cells(Shape::S, Rotation::R0  ).len(), 4);
-    assert_eq(piece_cells(Shape::S, Rotation::R90 ).len(), 4);
-    assert_eq(piece_cells(Shape::S, Rotation::R180).len(), 4);
-    assert_eq(piece_cells(Shape::S, Rotation::R270).len(), 4);
-}
-
-test fn test_piece_cells_z_all_rotations() -> Unit {
-    assert_eq(piece_cells(Shape::Z, Rotation::R0  ).len(), 4);
-    assert_eq(piece_cells(Shape::Z, Rotation::R90 ).len(), 4);
-    assert_eq(piece_cells(Shape::Z, Rotation::R180).len(), 4);
-    assert_eq(piece_cells(Shape::Z, Rotation::R270).len(), 4);
-}
-
-test fn test_piece_cells_l_all_rotations() -> Unit {
-    assert_eq(piece_cells(Shape::L, Rotation::R0  ).len(), 4);
-    assert_eq(piece_cells(Shape::L, Rotation::R90 ).len(), 4);
-    assert_eq(piece_cells(Shape::L, Rotation::R180).len(), 4);
-    assert_eq(piece_cells(Shape::L, Rotation::R270).len(), 4);
-}
-
-test fn test_piece_cells_j_all_rotations() -> Unit {
-    assert_eq(piece_cells(Shape::J, Rotation::R0  ).len(), 4);
-    assert_eq(piece_cells(Shape::J, Rotation::R90 ).len(), 4);
-    assert_eq(piece_cells(Shape::J, Rotation::R180).len(), 4);
-    assert_eq(piece_cells(Shape::J, Rotation::R270).len(), 4);
-}
-
-// ── kick_offsets table completeness ─────────────────────────────────────────
-
-test fn test_kick_offsets_o_is_identity() -> Unit {
-    assert_eq(kick_offsets(Shape::O, Rotation::R0, Rotation::R90).len(), 1);
-}
-
-test fn test_kick_offsets_i_all_transitions() -> Unit {
-    assert_eq(kick_offsets(Shape::I, Rotation::R0,   Rotation::R90 ).len(), 5);
-    assert_eq(kick_offsets(Shape::I, Rotation::R90,  Rotation::R0  ).len(), 5);
-    assert_eq(kick_offsets(Shape::I, Rotation::R90,  Rotation::R180).len(), 5);
-    assert_eq(kick_offsets(Shape::I, Rotation::R180, Rotation::R90 ).len(), 5);
-    assert_eq(kick_offsets(Shape::I, Rotation::R180, Rotation::R270).len(), 5);
-    assert_eq(kick_offsets(Shape::I, Rotation::R270, Rotation::R180).len(), 5);
-    assert_eq(kick_offsets(Shape::I, Rotation::R270, Rotation::R0  ).len(), 5);
-    assert_eq(kick_offsets(Shape::I, Rotation::R0,   Rotation::R270).len(), 5);
-}
-
-test fn test_kick_offsets_jlstz_all_transitions() -> Unit {
-    assert_eq(kick_offsets(Shape::T, Rotation::R0,   Rotation::R90 ).len(), 5);
-    assert_eq(kick_offsets(Shape::T, Rotation::R90,  Rotation::R0  ).len(), 5);
-    assert_eq(kick_offsets(Shape::T, Rotation::R90,  Rotation::R180).len(), 5);
-    assert_eq(kick_offsets(Shape::T, Rotation::R180, Rotation::R90 ).len(), 5);
-    assert_eq(kick_offsets(Shape::T, Rotation::R180, Rotation::R270).len(), 5);
-    assert_eq(kick_offsets(Shape::T, Rotation::R270, Rotation::R180).len(), 5);
-    assert_eq(kick_offsets(Shape::T, Rotation::R270, Rotation::R0  ).len(), 5);
-    assert_eq(kick_offsets(Shape::T, Rotation::R0,   Rotation::R270).len(), 5);
-}
-
-test fn test_kick_offsets_all_shapes_share_correctly() -> Unit {
-    // S, Z, L, J share the JLSTZ table.
-    assert_eq(kick_offsets(Shape::S, Rotation::R0, Rotation::R90).len(), 5);
-    assert_eq(kick_offsets(Shape::Z, Rotation::R0, Rotation::R90).len(), 5);
-    assert_eq(kick_offsets(Shape::L, Rotation::R0, Rotation::R90).len(), 5);
-    assert_eq(kick_offsets(Shape::J, Rotation::R0, Rotation::R90).len(), 5);
-}
-
-// ── gameboy_ms_at_level table completeness ──────────────────────────────────
-
-test fn test_gameboy_ms_endpoints() -> Unit {
-    assert_eq(gameboy_ms_at_level(1),  900);  // GB level 0
-    assert_eq(gameboy_ms_at_level(20), 100);  // GB level 19
-}
-
-test fn test_gameboy_ms_mid_levels() -> Unit {
-    assert_eq(gameboy_ms_at_level(5),  620);
-    assert_eq(gameboy_ms_at_level(9),  280);
-    assert_eq(gameboy_ms_at_level(11), 170);
-    assert_eq(gameboy_ms_at_level(14), 150);
-    assert_eq(gameboy_ms_at_level(17), 130);
-}
-
-test fn test_gameboy_ms_clamps() -> Unit {
-    assert_eq(gameboy_ms_at_level(0),   900);  // level < 1 clamps to 1
-    assert_eq(gameboy_ms_at_level(-5),  900);
-    assert_eq(gameboy_ms_at_level(100), 100);  // level > 20 clamps to 20
 }
 
 test fn test_i_r0_spans_row_1() -> Unit {
