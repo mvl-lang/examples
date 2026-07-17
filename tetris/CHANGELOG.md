@@ -4,6 +4,37 @@ All notable changes to tetris will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.5] - 2026-07-17
+
+### Added
+- Phase 5: `README.md` — quickstart, 11-requirement mapping table,
+  prover-layer breakdown from `mvl assurance`, full SRS + Game Boy
+  gravity documentation, effect-boundary + IFC audit-anchor `grep`
+  recipes, Makefile-target reference, original spec verbatim.
+- `bdd_test.mvl` — 12 BDD scenarios following the MVL convention
+  (ADR-0020: `given_ / when_ / then_ / scenario_`).  `make test-bdd`
+  runs them independently of the unit suite.
+- Filed [mvl-lang/mvl#1887](https://github.com/mvl-lang/mvl/issues/1887)
+  — LLVM emitter regression on flat nested enum patterns.  The tetris
+  source keeps `Key::Arrow(Direction::…)` in the original form as a
+  live repro until the compiler bug is fixed.
+
+### Changed
+- Gravity curve now tracks Game Boy Tetris (Type A, 1989) frame
+  drops per row, scaled by difficulty.  `main.mvl` uses ~2× the raw
+  GB values as a play multiplier (terminal renderers aren't sampled
+  at 60 Hz).
+- Game loop rewritten to tie gravity to the `read_key_timeout` wall
+  clock — a full-timeout branch means exactly `gravity_ms` elapsed
+  with no input.  Fixed the earlier accumulator-over-counting bug
+  where heavy input made gravity fire 3-6× faster than nominal.
+- Renderer no longer clears the whole screen every frame; the
+  `dirty` flag gates redraws to state-change moments.
+- Menu option-row width fixed (28 → 36 chars) to match the border.
+- LCG state capped to 24 bits before multiplication to avoid i64
+  overflow on chained calls (was crashing with exit 101 on
+  `random_seed → refill_bag`).
+
 ## [0.1.4] - 2026-07-17
 
 ### Added

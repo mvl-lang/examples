@@ -4,7 +4,7 @@ Formal spec for `tetris` (in the `mvl-lang/examples` repo) — the classic
 falling-block puzzle, built to demonstrate all 11 MVL requirements with
 heavy prover load and full Super Rotation System (SRS) rotation logic.
 
-Version: 0.1.4 (draft, phases 1-4 landed) — see [CHANGELOG.md](CHANGELOG.md) for history.
+Version: 0.1.5 (all phases landed) — see [CHANGELOG.md](CHANGELOG.md) for history.
 Last updated: 2026-07-17
 
 ---
