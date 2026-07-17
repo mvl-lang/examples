@@ -4,7 +4,7 @@ Formal spec for `tetris` (in the `mvl-lang/examples` repo) — the classic
 falling-block puzzle, built to demonstrate all 11 MVL requirements with
 heavy prover load and full Super Rotation System (SRS) rotation logic.
 
-Version: 0.1.2 (draft, phase 1 landed)
+Version: 0.1.2 (draft, phase 1 landed) — see [CHANGELOG.md](CHANGELOG.md) for history.
 Last updated: 2026-07-17
 
 ---
@@ -782,26 +782,7 @@ pub const RENDER_HZ:     Int =  30;     // upper bound on redraw rate
 The rest of `main.mvl` is I/O; magic strings (ANSI glyphs, palette
 labels) stay inline because they aren't reused.
 
-## 21. Version history
-
-- **0.1.2** (2026-07-17) — Post-phase-1 review fixes.
-  - §7.7 `lock_piece` gains a `piece_fully_inside_board` precondition —
-    clarifies that game-over path uses `is_game_over` instead of
-    lock_piece for spawn collisions.
-  - §7.9 `score_for_clear` upper bound raised from 12000 to 16000 —
-    matches the real maximum (Tetris × level 20 = 800 × 20).
-  - §8 Game `with invariant` strengthened from the trivial
-    `self.level >= 1` to `self.current.row <= 22 && self.next.row <= 22`,
-    which forces a cross-field obligation at every construction site.
-  - §13 rewritten to spell out seed flow — Game does NOT carry a seed
-    field; `refill_bag(seed)` is pure, `random_seed()` in main is the
-    only `! Random` site.  New §13.4 contract summary.
-- **0.1.1** (2026-07-17) — Add §20 explicit-constants catalogue; every
-  named magic number listed with its file and purpose.
-- **0.1.0** (2026-07-17) — Initial draft.  All 11-requirement mapping,
-  full SRS kick tables, `Tainted[Key]` IFC boundary, ~30 contracts.
-
-## 22. Related
+## 21. Related
 
 - `pong` — pong requirements.md is the direct template for this doc.
 - `snake_game` — first pkg-tui example; established the effect-boundary pattern.
