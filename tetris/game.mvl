@@ -58,13 +58,13 @@ pub const START_LEVEL_MAX: Int = 15;
 // ── Gravity + lock-delay constants (requirements.md §20.5) ────────────────────
 
 /// Starting gravity (ms per row) at level 1 on Easy difficulty.
-pub const GRAVITY_MS_EASY: Int = 800;
+pub const GRAVITY_MS_EASY: Int = 1200;
 
 /// Starting gravity at level 1 on Normal difficulty.
-pub const GRAVITY_MS_NORMAL: Int = 500;
+pub const GRAVITY_MS_NORMAL: Int = 800;
 
 /// Starting gravity at level 1 on Hard difficulty.
-pub const GRAVITY_MS_HARD: Int = 300;
+pub const GRAVITY_MS_HARD: Int = 500;
 
 /// Floor for gravity — even at max level we don't drop below this
 /// (otherwise the piece is uncontrollable).

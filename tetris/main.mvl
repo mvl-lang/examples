@@ -356,11 +356,15 @@ partial fn draw_game_over_overlay(
 
 // ── Full render ──────────────────────────────────────────────────────────────
 
+/// Redraw board + piece + side panel over the existing frame.  No
+/// `clear(term)` — the per-cell overwrites in `draw_board` erase the
+/// old piece position, so a global clear would only add flicker.
+/// Callers should invoke `clear` once at game start and thereafter
+/// only invoke `render` when game state has actually changed.
 partial fn render(
     term: val Terminal,
     game: Game,
 ) -> Unit ! Terminal {
-    let _: Unit = clear(term);
     let _: Unit = draw_border(term);
     let _: Unit = draw_board(term, game.board, game.palette);
     let _: Unit = draw_piece(term, game.current, game.palette);
@@ -683,14 +687,14 @@ partial fn trusted_args() -> List[String] ! Env {
 /// of game.mvl's implementation details).
 total fn gravity_for(game: Game) -> Int {
     let starting: Int = match game.difficulty {
-        Difficulty::Easy   => 800,
-        Difficulty::Normal => 500,
-        Difficulty::Hard   => 300,
+        Difficulty::Easy   => 1200,
+        Difficulty::Normal => 800,
+        Difficulty::Hard   => 500,
     };
     let range: Int = starting - 50;
     let step: Int = range / 19;
     let raw: Int = starting - (game.level - 1) * step;
-    if raw < 50 { 50 } else if raw > 1000 { 1000 } else { raw }
+    if raw < 50 { 50 } else if raw > 1200 { 1200 } else { raw }
 }
 
 // ── Game loop ────────────────────────────────────────────────────────────────
@@ -716,17 +720,45 @@ total fn is_quit_command(cmd: Command) -> Bool {
     }
 }
 
+/// True iff `cmd` is a "nothing changed" no-op.  Used to skip redraws.
+total fn is_noop_command(cmd: Command) -> Bool {
+    match cmd {
+        Command::Noop      => true,
+        Command::Quit      => false,
+        Command::MoveLeft  => false,
+        Command::MoveRight => false,
+        Command::SoftDrop  => false,
+        Command::HardDrop  => false,
+        Command::RotateCW  => false,
+        Command::RotateCCW => false,
+        Command::Pause     => false,
+    }
+}
+
 /// One iteration of the game loop.  Uses `return` to exit rather than
 /// a `ref` sentinel — MVL rejects `let x: ref Enum = None;` binding
 /// against a temporary.
+///
+/// Rendering is gated on a `dirty` flag: the frame is only redrawn
+/// when something visible changed (a non-Noop command applied or a
+/// gravity tick fired).  Without the flag, the loop would issue ~33
+/// full-screen redraws per second even when the piece was stationary
+/// — enough to cause visible flicker on most terminals.
 partial fn game_loop(
     term: val Terminal,
     initial: Game,
 ) -> LoopOutcome ! Terminal + Random {
     let game: ref Game = initial;
     let elapsed: ref Int = 0;
+    let dirty: ref Bool = true;
+    // Initial paint: clear the screen once, then let subsequent
+    // renders overwrite cell-by-cell without a global clear.
+    let _: Unit = clear(term);
     while true {
-        let _: Unit = render(term, game);
+        if dirty {
+            let _: Unit = render(term, game);
+            dirty = false;
+        }
 
         // Exit on GameOver — wait for a key, then finish.
         let over: Bool = match game.status {
@@ -754,17 +786,22 @@ partial fn game_loop(
                 //   1. `TETRIS-TUI-BOUNDARY` — taint at the raw source.
                 //   2. `TETRIS-INPUT-001`   — trust before sanitization.
                 // grep -n 'TETRIS-INPUT-001' finds exactly this line.
-                let dirty:   Tainted[Key] = relabel taint(k, "TETRIS-TUI-BOUNDARY");
-                let trusted: Key          = relabel trust(dirty, "TETRIS-INPUT-001");
-                let cmd:     Command      = key_to_command(trusted);
+                let dirty_key: Tainted[Key] = relabel taint(k, "TETRIS-TUI-BOUNDARY");
+                let trusted:   Key          = relabel trust(dirty_key, "TETRIS-INPUT-001");
+                let cmd:       Command      = key_to_command(trusted);
                 if is_quit_command(cmd) {
                     return LoopOutcome::Quit;
                 }
-                game = apply_command(game, cmd);
+                if !is_noop_command(cmd) {
+                    game = apply_command(game, cmd);
+                    dirty = true;
+                }
             },
         }
 
-        // Gravity clock.
+        // Gravity clock.  Any tick that fires marks the frame dirty
+        // — either the piece descended or (on lock) the board / next
+        // / score changed.
         elapsed = elapsed + INPUT_POLL_MS;
         let g: Int = gravity_for(game);
         if elapsed >= g {
@@ -776,6 +813,7 @@ partial fn game_loop(
             let advanced: Bag = advance_bag(topped.bag);
             game = tick_gravity(topped, next_shape, advanced);
             elapsed = 0;
+            dirty = true;
         }
     }
     LoopOutcome::Finished
