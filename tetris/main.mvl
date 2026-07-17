@@ -704,15 +704,17 @@ total fn gameboy_ms_at(level: Int) -> Int {
 }
 
 /// Per-tick gravity for the current game state.  Mirrors
-/// `game.mvl::gravity_ms(level, difficulty)`.
+/// `game.mvl::gravity_ms(level, difficulty)`.  Values are ~2x
+/// slower than the raw Game Boy table so gameplay in a terminal
+/// (where key events aren't sampled every frame) stays manageable.
 total fn gravity_for(game: Game) -> Int {
     let base: Int = gameboy_ms_at(game.level);
     let raw: Int = match game.difficulty {
-        Difficulty::Easy   => base + 300,
-        Difficulty::Normal => base,
-        Difficulty::Hard   => if base > 200 { base - 100 } else { base },
+        Difficulty::Easy   => base * 2 + 500,
+        Difficulty::Normal => base * 2,
+        Difficulty::Hard   => if base > 100 { base * 3 / 2 } else { base },
     };
-    if raw < 100 { 100 } else if raw > 1200 { 1200 } else { raw }
+    if raw < 200 { 200 } else if raw > 2500 { 2500 } else { raw }
 }
 
 // ── Game loop ────────────────────────────────────────────────────────────────
@@ -757,17 +759,24 @@ total fn is_noop_command(cmd: Command) -> Bool {
 /// a `ref` sentinel — MVL rejects `let x: ref Enum = None;` binding
 /// against a temporary.
 ///
-/// Rendering is gated on a `dirty` flag: the frame is only redrawn
-/// when something visible changed (a non-Noop command applied or a
-/// gravity tick fired).  Without the flag, the loop would issue ~33
-/// full-screen redraws per second even when the piece was stationary
-/// — enough to cause visible flicker on most terminals.
+/// Wall-clock discipline: gravity is tied to the read_key timeout,
+/// not to an iteration counter.  Each pass calls `read_key_timeout`
+/// with the current gravity_ms; if the read TIMES OUT (no key), a
+/// gravity tick fires — that means exactly `gravity_ms` wall-clock
+/// elapsed with no input.  If a key arrives, we process it and loop
+/// back for another full-gravity wait.  This avoids the accumulator
+/// over-counting bug where every iteration adds a fixed 30 ms
+/// regardless of how quickly a key returned.
+///
+/// Rendering is gated on a `dirty` flag: only redrawn when the game
+/// state actually changed (a non-Noop command applied or gravity
+/// fired).  Without the flag, the loop would issue ~33 redraws per
+/// second — enough to flicker on most terminals.
 partial fn game_loop(
     term: val Terminal,
     initial: Game,
 ) -> LoopOutcome ! Terminal + Random {
     let game: ref Game = initial;
-    let elapsed: ref Int = 0;
     let dirty: ref Bool = true;
     // Initial paint: clear the screen once, then let subsequent
     // renders overwrite cell-by-cell without a global clear.
@@ -789,14 +798,26 @@ partial fn game_loop(
             return LoopOutcome::Finished;
         }
 
-        // Wait up to INPUT_POLL_MS for a key.
-        let kr: Result[Option[Key], String] = read_key_timeout(term, INPUT_POLL_MS);
+        // Wait up to `gravity_ms` for a key; on timeout, gravity fires.
+        let g: Int = gravity_for(game);
+        let kr: Result[Option[Key], String] = read_key_timeout(term, g);
         let key_opt: Option[Key] = match kr {
             Ok(o)  => o,
             Err(_) => None,
         };
         match key_opt {
-            None => (),
+            None => {
+                // ── Gravity tick ─────────────────────────────────────────
+                // Timeout means exactly `g` ms elapsed with no input.
+                let topped: Game = ensure_bag(game);
+                let next_shape: Shape = match peek_bag(topped.bag) {
+                    Some(s) => s,
+                    None    => Shape::I,
+                };
+                let advanced: Bag = advance_bag(topped.bag);
+                game = tick_gravity(topped, next_shape, advanced);
+                dirty = true;
+            },
             Some(k) => {
                 // ── IFC trust boundary (requirements.md §16) ─────────────
                 // Every key from pkg-tui is treated as untrusted external
@@ -815,23 +836,6 @@ partial fn game_loop(
                     dirty = true;
                 }
             },
-        }
-
-        // Gravity clock.  Any tick that fires marks the frame dirty
-        // — either the piece descended or (on lock) the board / next
-        // / score changed.
-        elapsed = elapsed + INPUT_POLL_MS;
-        let g: Int = gravity_for(game);
-        if elapsed >= g {
-            let topped: Game = ensure_bag(game);
-            let next_shape: Shape = match peek_bag(topped.bag) {
-                Some(s) => s,
-                None    => Shape::I,
-            };
-            let advanced: Bag = advance_bag(topped.bag);
-            game = tick_gravity(topped, next_shape, advanced);
-            elapsed = 0;
-            dirty = true;
         }
     }
     LoopOutcome::Finished
