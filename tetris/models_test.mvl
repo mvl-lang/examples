@@ -49,11 +49,10 @@ type Config = struct {
     start_level: Int where self >= 1 && self <= 15,
 }
 
+type Board = struct { cells: List[List[Cell]] }
+
 type ClearResult = struct {
-    board:   Bag,   // placeholder — Board carries a List[List[Cell]] which
-                    // we don't reconstruct in leaf tests.  ClearResult's
-                    // interesting refinement is `cleared`; we substitute
-                    // Bag here to avoid rebuilding a full board.
+    board:   Board,
     cleared: Int where self >= 0 && self <= 4,
 }
 
@@ -286,7 +285,7 @@ test fn test_config_start_level_max() -> Unit {
 
 test fn test_clear_result_zero() -> Unit {
     let r: ClearResult = ClearResult {
-        board:   Bag { pieces: [] },
+        board:   Board { cells: [] },
         cleared: 0,
     };
     assert_eq(r.cleared, 0);
@@ -294,7 +293,7 @@ test fn test_clear_result_zero() -> Unit {
 
 test fn test_clear_result_tetris() -> Unit {
     let r: ClearResult = ClearResult {
-        board:   Bag { pieces: [] },
+        board:   Board { cells: [] },
         cleared: 4,
     };
     assert_eq(r.cleared, 4);

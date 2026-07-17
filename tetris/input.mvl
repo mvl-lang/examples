@@ -25,14 +25,18 @@ use pkg.tui.{Key, Direction}
 
 // ── Sanitizer ─────────────────────────────────────────────────────────────────
 
-/// Convert an externally-supplied key press to a sanitized game command.
+/// Convert a sanitized key press to a game command.  Pure and total.
 ///
-/// The single audited `relabel trust(k, "TETRIS-INPUT-001")` is the
-/// only path from a raw keystroke to game state.  Every other function
-/// in the codebase accepts sanitized types (plain `Command`, plain
-/// `Key` after unwrap, etc.).
-pub total fn key_to_command(k: Tainted[Key]) -> Command {
-    match relabel trust(k, "TETRIS-INPUT-001") {
+/// Callers must have already performed `relabel trust(t,
+/// "TETRIS-INPUT-001")` at the pkg-tui boundary — see `main.mvl`.
+/// The compiler enforces this: any caller with a `Tainted[Key]` in
+/// hand cannot invoke `key_to_command` without an explicit relabel.
+///
+/// The exhaustive match on every `Key` variant (no `_` wildcard) is
+/// the sanitization: unknown keys map to `Command::Noop` rather than
+/// bypassing.
+pub total fn key_to_command(k: Key) -> Command {
+    match k {
         Key::Arrow(Direction::Left)  => Command::MoveLeft,
         Key::Arrow(Direction::Right) => Command::MoveRight,
         Key::Arrow(Direction::Down)  => Command::SoftDrop,

@@ -1,0 +1,851 @@
+// main.mvl — game loop, menu, CLI parse, and rendering for tetris.
+//
+// This is the ONLY file with effects (Terminal + Random + Console +
+// Env).  Every function that touches the terminal, reads a key, pulls
+// randomness, or reads argv lives here.
+//
+// The TTY boundary — where a `Key` from pkg-tui becomes a
+// `Tainted[Key]` — lives in `game_loop`: a single audited
+// `relabel taint(k, "TETRIS-TUI-BOUNDARY")` marks every keystroke as
+// untrusted before it enters `input.mvl::key_to_command`.  See
+// requirements.md §16 for the full IFC design.
+//
+// Demonstrates:
+//   1. Req 4  (Null):    Option[Key] from read_key_timeout, Option[Config] from menu
+//   2. Req 5  (Errors):  Result[Terminal, String] from new_terminal, ? propagation
+//   3. Req 6  (Ownership): Terminal is `iso`; dropped in main via RAII
+//   4. Req 7  (Effects): sharp boundary — only file with any effect
+//   5. Req 11 (IFC):     relabel taint at the pkg-tui boundary
+//
+// Assurance note: 0 extern blocks — all I/O is via `pkg.tui`.
+
+use models::{
+    Shape, Rotation, Cell, Piece, Board, Bag,
+    GameStatus, Command, Palette, Difficulty,
+    Config, Game,
+}
+use game::{
+    apply_command, tick_gravity, new_game,
+    refill_bag, peek_bag, advance_bag,
+    with_bag, spawn_piece,
+    piece_cells,
+    INPUT_POLL_MS_DEFAULT,
+}
+use input::{key_to_command}
+use pkg.tui.{
+    Terminal, Key, Direction, Color, Style, TerminalSize,
+    new_terminal, drop_terminal, size, read_key, read_key_timeout,
+    clear, set_cursor, print_styled,
+    style, bold_style, colored, bold_colored,
+}
+use std.random.{int}
+use std.env.{args}
+
+// ── Constants (requirements.md §20.6) ─────────────────────────────────────────
+
+/// Base input-poll rate.  The game loop reads a key with this timeout
+/// each iteration; gravity accumulates elapsed time across iterations
+/// and fires when it exceeds `gravity_ms(level, difficulty)`.
+pub const INPUT_POLL_MS: Int = 30;
+
+/// Playfield origin — leaves room at the top for a border row.
+pub const FIELD_ROW_OFFSET: Int = 2;
+
+/// Left edge of the playfield within the terminal.  Enough space to
+/// centre the field in a typical 80-col terminal.
+pub const FIELD_COL_OFFSET: Int = 4;
+
+/// Width of a single cell in monospace characters (`██` fits square).
+pub const CELL_WIDTH: Int = 2;
+
+/// Right-side panel origin (score/level/lines/next).
+pub const PANEL_COL_OFFSET: Int = 30;
+
+// ── Style helpers ────────────────────────────────────────────────────────────
+
+total fn border_style() -> Style {
+    bold_style()
+}
+
+total fn text_style() -> Style {
+    bold_style()
+}
+
+/// Colour of a shape in the current palette.
+total fn shape_style(s: Shape, p: Palette) -> Style {
+    match p {
+        Palette::BlackWhite => bold_style(),
+        Palette::Color => match s {
+            Shape::I => bold_colored(Color::Cyan),
+            Shape::O => bold_colored(Color::Yellow),
+            Shape::T => bold_colored(Color::Magenta),
+            Shape::S => bold_colored(Color::Green),
+            Shape::Z => bold_colored(Color::Red),
+            Shape::L => bold_colored(Color::White),
+            Shape::J => bold_colored(Color::Blue),
+        },
+    }
+}
+
+/// Glyph for a filled cell.  In colour mode every shape is `██`; in
+/// black-and-white mode each shape gets a distinct fill pattern.
+total fn shape_glyph(s: Shape, p: Palette) -> String {
+    match p {
+        Palette::Color => "██",
+        Palette::BlackWhite => match s {
+            Shape::I => "██",
+            Shape::O => "▓▓",
+            Shape::T => "▒▒",
+            Shape::S => "░░",
+            Shape::Z => "██",
+            Shape::L => "▓▓",
+            Shape::J => "▒▒",
+        },
+    }
+}
+
+// ── Rendering primitives ─────────────────────────────────────────────────────
+
+partial fn put(
+    term: val Terminal,
+    row: Int,
+    col: Int,
+    text: String,
+    s: Style,
+) -> Unit ! Terminal {
+    let _: Unit = set_cursor(term, row, col);
+    print_styled(term, text, s)
+}
+
+/// Concatenate `n` copies of `piece`.
+partial fn repeat_str(piece: String, n: Int, acc: String) -> String {
+    if n <= 0 { acc } else { repeat_str(piece, n - 1, acc.concat(piece)) }
+}
+
+// ── Playfield rendering ──────────────────────────────────────────────────────
+
+/// Draw the outer border box around the 10×20 playfield.
+partial fn draw_border(term: val Terminal) -> Unit ! Terminal {
+    let s: Style = border_style();
+    let inner: String = repeat_str("═", 10 * CELL_WIDTH, "");
+    let top: String = "╔".concat(inner).concat("╗");
+    let bot: String = "╚".concat(inner).concat("╝");
+    let _: Unit = put(term, FIELD_ROW_OFFSET - 1, FIELD_COL_OFFSET, top, s);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 20, FIELD_COL_OFFSET, bot, s);
+    draw_side_walls(term, 0, 19, s)
+}
+
+partial fn draw_side_walls(
+    term: val Terminal,
+    row: Int,
+    max_row: Int,
+    s: Style,
+) -> Unit ! Terminal {
+    if row > max_row {
+        ()
+    } else {
+        let term_row: Int = FIELD_ROW_OFFSET + row;
+        let _: Unit = put(term, term_row, FIELD_COL_OFFSET, "║", s);
+        let _: Unit = put(term, term_row,
+            FIELD_COL_OFFSET + 10 * CELL_WIDTH + 1, "║", s);
+        draw_side_walls(term, row + 1, max_row, s)
+    }
+}
+
+/// Paint a single 2-cell block for a shape at (row, col) in playfield
+/// coordinates.  Skips off-board rows (spawn buffer).
+partial fn draw_cell(
+    term: val Terminal,
+    row: Int,
+    col: Int,
+    s: Shape,
+    p: Palette,
+) -> Unit ! Terminal {
+    if row < 0 || row >= 20 || col < 0 || col >= 10 {
+        ()
+    } else {
+        let term_row: Int = FIELD_ROW_OFFSET + row;
+        let term_col: Int = FIELD_COL_OFFSET + 1 + col * CELL_WIDTH;
+        put(term, term_row, term_col, shape_glyph(s, p), shape_style(s, p))
+    }
+}
+
+/// Erase a single 2-cell block (draws two spaces at that position).
+partial fn erase_cell_at(
+    term: val Terminal,
+    row: Int,
+    col: Int,
+) -> Unit ! Terminal {
+    if row < 0 || row >= 20 || col < 0 || col >= 10 {
+        ()
+    } else {
+        let term_row: Int = FIELD_ROW_OFFSET + row;
+        let term_col: Int = FIELD_COL_OFFSET + 1 + col * CELL_WIDTH;
+        put(term, term_row, term_col, "  ", style())
+    }
+}
+
+/// Paint one row of the locked board.
+partial fn draw_row(
+    term: val Terminal,
+    row: Int,
+    cells: List[Cell],
+    p: Palette,
+) -> Unit ! Terminal {
+    let i: ref Int = 0;
+    let n: Int = cells.len();
+    while i < n decreases n - i {
+        match cells.get(i) {
+            None => (),
+            Some(c) => match c {
+                Cell::Empty => {
+                    let _: Unit = erase_cell_at(term, row, i);
+                },
+                Cell::Filled(s) => {
+                    let _: Unit = draw_cell(term, row, i, s, p);
+                },
+            },
+        }
+        i = i + 1;
+    }
+}
+
+/// Paint every locked cell of the board.  Called on every render tick;
+/// cheap enough (200 cells) that we don't bother with dirty-region
+/// tracking.
+partial fn draw_board(
+    term: val Terminal,
+    board: Board,
+    p: Palette,
+) -> Unit ! Terminal {
+    let i: ref Int = 0;
+    while i < 20 decreases 20 - i {
+        match board.cells.get(i) {
+            None => (),
+            Some(r) => {
+                let _: Unit = draw_row(term, i, r, p);
+            },
+        }
+        i = i + 1;
+    }
+}
+
+/// Paint the four cells of a piece.
+partial fn draw_piece(
+    term: val Terminal,
+    piece: Piece,
+    p: Palette,
+) -> Unit ! Terminal {
+    let cells: List[Offset] = piece_cells(piece.shape, piece.rotation);
+    let n: Int = cells.len();
+    let i: ref Int = 0;
+    while i < n decreases n - i {
+        match cells.get(i) {
+            None => (),
+            Some(off) => {
+                let _: Unit = draw_cell(term, piece.row + off.drow,
+                                        piece.col + off.dcol, piece.shape, p);
+            },
+        }
+        i = i + 1;
+    }
+}
+
+// ── Side panel ───────────────────────────────────────────────────────────────
+
+partial fn draw_side_panel(
+    term: val Terminal,
+    game: Game,
+) -> Unit ! Terminal {
+    let s: Style = text_style();
+    let col: Int = PANEL_COL_OFFSET;
+    let _: Unit = put(term, FIELD_ROW_OFFSET,     col, "  MVL TETRIS  ", s);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 2, col, "NEXT:", s);
+    let _: Unit = draw_next_preview(term, game.next.shape, game.palette,
+                                     FIELD_ROW_OFFSET + 3, col);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 8,  col, "SCORE:", s);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 9,  col, pad_number(game.score, 6), s);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 11, col, "LEVEL: ".concat(int_to_string(game.level)), s);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 12, col, "LINES: ".concat(int_to_string(game.lines_cleared)), s);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 15, col, "←→   move",     s);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 16, col, "z/x  rotate",    s);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 17, col, "↓    soft drop", s);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 18, col, "␣    hard drop", s);
+    let _: Unit = put(term, FIELD_ROW_OFFSET + 19, col, "p    pause",     s);
+    put(term, FIELD_ROW_OFFSET + 20, col, "q    quit", s)
+}
+
+partial fn draw_next_preview(
+    term: val Terminal,
+    s: Shape,
+    p: Palette,
+    row: Int,
+    col: Int,
+) -> Unit ! Terminal {
+    // Clear a 4×4 area first.
+    let clear_row: ref Int = 0;
+    while clear_row < 4 decreases 4 - clear_row {
+        let _: Unit = put(term, row + clear_row, col, "        ", style());
+        clear_row = clear_row + 1;
+    }
+    // Draw the piece cells at (row + drow, col + dcol*2).
+    let cells: List[Offset] = piece_cells(s, Rotation::R0);
+    let n: Int = cells.len();
+    let i: ref Int = 0;
+    while i < n decreases n - i {
+        match cells.get(i) {
+            None => (),
+            Some(off) => {
+                let _: Unit = put(term, row + off.drow, col + off.dcol * CELL_WIDTH,
+                                  shape_glyph(s, p), shape_style(s, p));
+            },
+        }
+        i = i + 1;
+    }
+}
+
+/// Right-pad an integer with leading zeroes to `width` digits.
+total fn pad_number(n: Int, width: Int) -> String {
+    let raw: String = int_to_string(n);
+    let missing: Int = width - raw.len();
+    if missing <= 0 {
+        raw
+    } else {
+        pad_zeros(missing).concat(raw)
+    }
+}
+
+/// Return a string of `n` "0" characters.  Bounded iteration → `total fn`.
+total fn pad_zeros(n: Int) -> String {
+    let s: ref String = "";
+    let i: ref Int = 0;
+    while i < n decreases n - i {
+        s = s.concat("0");
+        i = i + 1;
+    }
+    s
+}
+
+/// Convert an Int to a String — helper because MVL's Int::to_string is
+/// preferred at call sites (see game.mvl / snake_game).
+total fn int_to_string(n: Int) -> String {
+    n.to_string()
+}
+
+// ── Overlays ─────────────────────────────────────────────────────────────────
+
+partial fn draw_pause_overlay(term: val Terminal) -> Unit ! Terminal {
+    let s: Style = bold_style();
+    let row: Int = FIELD_ROW_OFFSET + 9;
+    let col: Int = FIELD_COL_OFFSET + 2;
+    put(term, row, col, "  ⏸ PAUSED — press p to resume  ", s)
+}
+
+partial fn draw_game_over_overlay(
+    term: val Terminal,
+    game: Game,
+) -> Unit ! Terminal {
+    let s: Style = bold_style();
+    let row: Int = FIELD_ROW_OFFSET + 9;
+    let col: Int = FIELD_COL_OFFSET + 2;
+    let msg: String = "  GAME OVER — score: "
+        .concat(int_to_string(game.score))
+        .concat("  ");
+    put(term, row, col, msg, s)
+}
+
+// ── Full render ──────────────────────────────────────────────────────────────
+
+partial fn render(
+    term: val Terminal,
+    game: Game,
+) -> Unit ! Terminal {
+    let _: Unit = clear(term);
+    let _: Unit = draw_border(term);
+    let _: Unit = draw_board(term, game.board, game.palette);
+    let _: Unit = draw_piece(term, game.current, game.palette);
+    let _: Unit = draw_side_panel(term, game);
+    match game.status {
+        GameStatus::Playing  => (),
+        GameStatus::Paused   => {
+            let _: Unit = draw_pause_overlay(term);
+        },
+        GameStatus::GameOver => {
+            let _: Unit = draw_game_over_overlay(term, game);
+        },
+    }
+}
+
+// ── Menu ─────────────────────────────────────────────────────────────────────
+
+total fn cycle_palette(p: Palette) -> Palette {
+    match p {
+        Palette::BlackWhite => Palette::Color,
+        Palette::Color      => Palette::BlackWhite,
+    }
+}
+
+total fn cycle_difficulty(d: Difficulty) -> Difficulty {
+    match d {
+        Difficulty::Easy   => Difficulty::Normal,
+        Difficulty::Normal => Difficulty::Hard,
+        Difficulty::Hard   => Difficulty::Easy,
+    }
+}
+
+total fn cycle_start_level(n: Int) -> Int {
+    let next: Int = n + 1;
+    if next > 15 { 1 } else { next }
+}
+
+total fn palette_label(p: Palette) -> String {
+    match p {
+        Palette::BlackWhite => "B/W   ",
+        Palette::Color      => "Color ",
+    }
+}
+
+total fn difficulty_label(d: Difficulty) -> String {
+    match d {
+        Difficulty::Easy   => "Easy  ",
+        Difficulty::Normal => "Normal",
+        Difficulty::Hard   => "Hard  ",
+    }
+}
+
+partial fn draw_menu(
+    term: val Terminal,
+    cfg: Config,
+    sel: Int,
+) -> Unit ! Terminal {
+    let _: Unit = clear(term);
+    let s: Style = bold_style();
+    let _: Unit = put(term, 2, 4, "╔══════════════════════════════════╗", s);
+    let _: Unit = put(term, 3, 4, "║         M V L   T E T R I S      ║", s);
+    let _: Unit = put(term, 4, 4, "╠══════════════════════════════════╣", s);
+    let p_prefix: String = if sel == 0 { "▶ " } else { "  " };
+    let d_prefix: String = if sel == 1 { "▶ " } else { "  " };
+    let l_prefix: String = if sel == 2 { "▶ " } else { "  " };
+    let _: Unit = put(term, 5, 4, "║                                  ║", s);
+    let _: Unit = put(term, 6, 4,
+        "║  ".concat(p_prefix).concat("Palette:     ")
+            .concat(palette_label(cfg.palette)).concat("   ║"), s);
+    let _: Unit = put(term, 7, 4,
+        "║  ".concat(d_prefix).concat("Difficulty:  ")
+            .concat(difficulty_label(cfg.difficulty)).concat("   ║"), s);
+    let _: Unit = put(term, 8, 4,
+        "║  ".concat(l_prefix).concat("Start level: ")
+            .concat(pad_number(cfg.start_level, 2)).concat("       ║"), s);
+    let _: Unit = put(term, 9,  4, "║                                  ║", s);
+    let _: Unit = put(term, 10, 4, "║  ↑↓ move  ←→ cycle  ⏎ start      ║", s);
+    put(term, 11, 4, "╚══════════════════════════════════╝", s)
+}
+
+type MenuAction = enum {
+    NavUp, NavDown, Cycle, Commit, Cancel, Ignore,
+}
+
+total fn key_to_menu_action(k: Key) -> MenuAction {
+    match k {
+        Key::Arrow(Direction::Up)    => MenuAction::NavUp,
+        Key::Arrow(Direction::Down)  => MenuAction::NavDown,
+        Key::Arrow(Direction::Left)  => MenuAction::Cycle,
+        Key::Arrow(Direction::Right) => MenuAction::Cycle,
+        Key::Enter                   => MenuAction::Commit,
+        Key::Escape                  => MenuAction::Cancel,
+        Key::Char(c) => if c == "q" || c == "Q" {
+            MenuAction::Cancel
+        } else {
+            MenuAction::Ignore
+        },
+        Key::Backspace => MenuAction::Ignore,
+        Key::Delete    => MenuAction::Ignore,
+        Key::Unknown   => MenuAction::Ignore,
+    }
+}
+
+total fn cycle_config_at(cfg: Config, sel: Int) -> Config {
+    if sel == 0 {
+        Config {
+            palette:     cycle_palette(cfg.palette),
+            difficulty:  cfg.difficulty,
+            start_level: cfg.start_level,
+        }
+    } else if sel == 1 {
+        Config {
+            palette:     cfg.palette,
+            difficulty:  cycle_difficulty(cfg.difficulty),
+            start_level: cfg.start_level,
+        }
+    } else {
+        Config {
+            palette:     cfg.palette,
+            difficulty:  cfg.difficulty,
+            start_level: cycle_start_level(cfg.start_level),
+        }
+    }
+}
+
+partial fn menu_loop(
+    term: val Terminal,
+    initial: Config,
+) -> Option[Config] ! Terminal {
+    let cfg: ref Config = initial;
+    let sel: ref Int = 0;
+    while true {
+        let _: Unit = draw_menu(term, cfg, sel);
+        let kr: Result[Key, String] = read_key(term);
+        let key: Key = match kr {
+            Ok(k)  => k,
+            Err(_) => Key::Unknown,
+        };
+        match key_to_menu_action(key) {
+            MenuAction::NavUp   => { sel = if sel == 0 { 2 } else { sel - 1 }; },
+            MenuAction::NavDown => { sel = if sel == 2 { 0 } else { sel + 1 }; },
+            MenuAction::Cycle   => { cfg = cycle_config_at(cfg, sel); },
+            MenuAction::Commit  => { return Some(cfg) },
+            MenuAction::Cancel  => { return None },
+            MenuAction::Ignore  => (),
+        }
+    }
+    None
+}
+
+// ── CLI parse ────────────────────────────────────────────────────────────────
+
+total fn parse_palette(s: String) -> Option[Palette] {
+    if s == "bw" || s == "b/w" {
+        Some(Palette::BlackWhite)
+    } else if s == "color" || s == "colour" {
+        Some(Palette::Color)
+    } else {
+        None
+    }
+}
+
+total fn parse_difficulty(s: String) -> Option[Difficulty] {
+    if s == "easy" {
+        Some(Difficulty::Easy)
+    } else if s == "normal" {
+        Some(Difficulty::Normal)
+    } else if s == "hard" {
+        Some(Difficulty::Hard)
+    } else {
+        None
+    }
+}
+
+total fn parse_start_level(s: String) -> Option[Int] {
+    let n: Int = s.parse_int().unwrap_or(0);
+    if n >= 1 && n <= 15 {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+/// Find the value of `--flag VALUE` in argv, if present.
+total fn find_flag(argv: List[String], flag: String) -> Option[String] {
+    let n: Int = argv.len();
+    let i: ref Int = 0;
+    let hit: ref Int = 0 - 1;
+    while i < n decreases n - i {
+        let cur: String = argv.get(i).unwrap_or("");
+        if cur == flag && i + 1 < n {
+            hit = i + 1;
+            i = n;
+        } else {
+            i = i + 1;
+        }
+    }
+    if hit >= 0 {
+        argv.get(hit)
+    } else {
+        None
+    }
+}
+
+/// Parse a full Config from argv.  Returns Some(Ok) if all three
+/// flags are present and valid; Some(Err) if any invalid; None if all
+/// missing (menu will handle it).
+total fn parse_config(argv: List[String]) -> Option[Result[Config, String]] {
+    let p_opt: Option[String] = find_flag(argv, "--palette");
+    let d_opt: Option[String] = find_flag(argv, "--difficulty");
+    let l_opt: Option[String] = find_flag(argv, "--start-level");
+    let any: Bool = match p_opt {
+        Some(_) => true,
+        None => match d_opt { Some(_) => true, None => match l_opt { Some(_) => true, None => false } },
+    };
+    if !any {
+        None
+    } else {
+        let palette: Palette = match p_opt {
+            Some(s) => match parse_palette(s) {
+                Some(x) => x,
+                None    => Palette::Color,
+            },
+            None => Palette::Color,
+        };
+        let bad_p: Bool = match p_opt {
+            Some(s) => match parse_palette(s) { Some(_) => false, None => true },
+            None => false,
+        };
+        if bad_p {
+            return Some(Err("invalid --palette (want bw|color)"));
+        }
+        let difficulty: Difficulty = match d_opt {
+            Some(s) => match parse_difficulty(s) {
+                Some(x) => x,
+                None    => Difficulty::Normal,
+            },
+            None => Difficulty::Normal,
+        };
+        let bad_d: Bool = match d_opt {
+            Some(s) => match parse_difficulty(s) { Some(_) => false, None => true },
+            None => false,
+        };
+        if bad_d {
+            return Some(Err("invalid --difficulty (want easy|normal|hard)"));
+        }
+        let start_level: Int = match l_opt {
+            Some(s) => match parse_start_level(s) {
+                Some(x) => x,
+                None    => 1,
+            },
+            None => 1,
+        };
+        let bad_l: Bool = match l_opt {
+            Some(s) => match parse_start_level(s) { Some(_) => false, None => true },
+            None => false,
+        };
+        if bad_l {
+            return Some(Err("invalid --start-level (want 1..15)"));
+        }
+        Some(Ok(Config {
+            palette:     palette,
+            difficulty:  difficulty,
+            start_level: start_level,
+        }))
+    }
+}
+
+// ── Random seed ──────────────────────────────────────────────────────────────
+
+/// Pull a fresh seed for the 7-bag shuffle.  The only `! Random` site
+/// in the codebase (requirements.md §13).
+partial fn random_seed() -> Int ! Random {
+    int(0, 999999)
+}
+
+// ── Bag helpers (main-side) ──────────────────────────────────────────────────
+
+/// Ensure `game.bag` has at least one shape; refill from a fresh seed
+/// otherwise.  Returns the game with a topped-up bag.
+partial fn ensure_bag(game: Game) -> Game ! Random {
+    if game.bag.pieces.len() == 0 {
+        let seed: Int = random_seed();
+        let fresh: Bag = refill_bag(seed);
+        with_bag(game, fresh)
+    } else {
+        game
+    }
+}
+
+// ── Argv (Tainted[String] boundary) ──────────────────────────────────────────
+
+/// Trust argv at the boundary — the CLI parser needs plain `String`.
+partial fn trusted_args() -> List[String] ! Env {
+    let raw: List[Tainted[String]] = args();
+    let n: Int = raw.len();
+    let i: ref Int = 0;
+    let out: ref List[String] = [];
+    while i < n decreases n - i {
+        let opt: Option[Tainted[String]] = raw.get(i);
+        match opt {
+            None => (),
+            Some(t) => {
+                let _: Unit = out.push(relabel trust(t, "CLI-PARSE"));
+            },
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ── Gravity helpers ──────────────────────────────────────────────────────────
+
+/// gravity_ms mirroring game.mvl (repeated to keep main.mvl independent
+/// of game.mvl's implementation details).
+total fn gravity_for(game: Game) -> Int {
+    let starting: Int = match game.difficulty {
+        Difficulty::Easy   => 800,
+        Difficulty::Normal => 500,
+        Difficulty::Hard   => 300,
+    };
+    let range: Int = starting - 50;
+    let step: Int = range / 19;
+    let raw: Int = starting - (game.level - 1) * step;
+    if raw < 50 { 50 } else if raw > 1000 { 1000 } else { raw }
+}
+
+// ── Game loop ────────────────────────────────────────────────────────────────
+
+/// Reason the loop exited.
+type LoopOutcome = enum {
+    Finished,   // game reached GameOver naturally
+    Quit,       // user pressed q / Escape
+}
+
+/// Classify a command as "should exit" or "should apply to game".
+total fn is_quit_command(cmd: Command) -> Bool {
+    match cmd {
+        Command::Quit      => true,
+        Command::MoveLeft  => false,
+        Command::MoveRight => false,
+        Command::SoftDrop  => false,
+        Command::HardDrop  => false,
+        Command::RotateCW  => false,
+        Command::RotateCCW => false,
+        Command::Pause     => false,
+        Command::Noop      => false,
+    }
+}
+
+/// One iteration of the game loop.  Uses `return` to exit rather than
+/// a `ref` sentinel — MVL rejects `let x: ref Enum = None;` binding
+/// against a temporary.
+partial fn game_loop(
+    term: val Terminal,
+    initial: Game,
+) -> LoopOutcome ! Terminal + Random {
+    let game: ref Game = initial;
+    let elapsed: ref Int = 0;
+    while true {
+        let _: Unit = render(term, game);
+
+        // Exit on GameOver — wait for a key, then finish.
+        let over: Bool = match game.status {
+            GameStatus::GameOver => true,
+            GameStatus::Playing  => false,
+            GameStatus::Paused   => false,
+        };
+        if over {
+            let _: Result[Option[Key], String] = read_key_timeout(term, 30000);
+            return LoopOutcome::Finished;
+        }
+
+        // Wait up to INPUT_POLL_MS for a key.
+        let kr: Result[Option[Key], String] = read_key_timeout(term, INPUT_POLL_MS);
+        let key_opt: Option[Key] = match kr {
+            Ok(o)  => o,
+            Err(_) => None,
+        };
+        match key_opt {
+            None => (),
+            Some(k) => {
+                // ── IFC trust boundary (requirements.md §16) ─────────────
+                // Every key from pkg-tui is treated as untrusted external
+                // input.  Two audited relabels bracket the boundary:
+                //   1. `TETRIS-TUI-BOUNDARY` — taint at the raw source.
+                //   2. `TETRIS-INPUT-001`   — trust before sanitization.
+                // grep -n 'TETRIS-INPUT-001' finds exactly this line.
+                let dirty:   Tainted[Key] = relabel taint(k, "TETRIS-TUI-BOUNDARY");
+                let trusted: Key          = relabel trust(dirty, "TETRIS-INPUT-001");
+                let cmd:     Command      = key_to_command(trusted);
+                if is_quit_command(cmd) {
+                    return LoopOutcome::Quit;
+                }
+                game = apply_command(game, cmd);
+            },
+        }
+
+        // Gravity clock.
+        elapsed = elapsed + INPUT_POLL_MS;
+        let g: Int = gravity_for(game);
+        if elapsed >= g {
+            let topped: Game = ensure_bag(game);
+            let next_shape: Shape = match peek_bag(topped.bag) {
+                Some(s) => s,
+                None    => Shape::I,
+            };
+            let advanced: Bag = advance_bag(topped.bag);
+            game = tick_gravity(topped, next_shape, advanced);
+            elapsed = 0;
+        }
+    }
+    LoopOutcome::Finished
+}
+
+// ── main ─────────────────────────────────────────────────────────────────────
+
+/// Default config used when the menu opens without CLI flags.
+total fn default_config() -> Config {
+    Config {
+        palette:     Palette::Color,
+        difficulty:  Difficulty::Normal,
+        start_level: 1,
+    }
+}
+
+partial fn play(
+    term: val Terminal,
+    cfg: Config,
+) -> LoopOutcome ! Terminal + Random {
+    // Seed the initial bag and draw the first two pieces.
+    let seed: Int = random_seed();
+    let bag: Bag = refill_bag(seed);
+    let first_shape: Shape = match peek_bag(bag) {
+        Some(s) => s,
+        None    => Shape::I,
+    };
+    let bag2: Bag = advance_bag(bag);
+    let next_shape: Shape = match peek_bag(bag2) {
+        Some(s) => s,
+        None    => Shape::O,
+    };
+    let bag3: Bag = advance_bag(bag2);
+    let g0: Game = new_game(cfg, first_shape, next_shape, bag3);
+    game_loop(term, g0)
+}
+
+partial fn main() -> Unit ! Terminal + Random + Console + Env {
+    let argv: List[String] = trusted_args();
+    let cli: Option[Result[Config, String]] = parse_config(argv);
+    let cfg_or_err: Result[Option[Config], String] = match cli {
+        Some(Err(msg))  => Err(msg),
+        Some(Ok(cfg))   => Ok(Some(cfg)),
+        None            => Ok(None),
+    };
+
+    match cfg_or_err {
+        Err(msg) => {
+            eprintln("tetris: ".concat(msg));
+            ()
+        },
+        Ok(from_cli) => {
+            let term_r: Result[Terminal, String] = new_terminal();
+            match term_r {
+                Err(msg) => {
+                    eprintln("tetris: ".concat(msg));
+                    ()
+                },
+                Ok(term) => {
+                    let cfg_opt: Option[Config] = match from_cli {
+                        Some(c) => Some(c),
+                        None    => menu_loop(term, default_config()),
+                    };
+                    match cfg_opt {
+                        None => {
+                            let _: Unit = drop_terminal(term);
+                            ()
+                        },
+                        Some(cfg) => {
+                            let _: LoopOutcome = play(term, cfg);
+                            drop_terminal(term)
+                        },
+                    }
+                },
+            }
+        },
+    }
+}

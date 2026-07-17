@@ -4,7 +4,7 @@ Formal spec for `tetris` (in the `mvl-lang/examples` repo) — the classic
 falling-block puzzle, built to demonstrate all 11 MVL requirements with
 heavy prover load and full Super Rotation System (SRS) rotation logic.
 
-Version: 0.1.3 (draft, phase 1 landed) — see [CHANGELOG.md](CHANGELOG.md) for history.
+Version: 0.1.4 (draft, phases 1-4 landed) — see [CHANGELOG.md](CHANGELOG.md) for history.
 Last updated: 2026-07-17
 
 ---
@@ -566,63 +566,64 @@ audited relabel.
 `pkg.tui.read_key_timeout` returns a bare `Key`. Because the source is
 an external, uncontrolled TTY (the user could pipe an automated script
 in), `main.mvl` **explicitly re-taints the key at the trust boundary**
-before handing it to `input.mvl`:
+and then trusts it via a second audited relabel:
 
 ```mvl
-// main.mvl — boundary: TTY → Tainted[Key]
-let raw:  Key          = read_key_timeout(term, 30)?;
-let dirty: Tainted[Key] = relabel taint(raw, "TETRIS-TUI-BOUNDARY");
-let cmd:  Command      = key_to_command(dirty);
+// main.mvl — boundary: TTY → Tainted[Key] → bare Key → Command
+let raw:     Key          = read_key_timeout(term, 30)?;
+let dirty:   Tainted[Key] = relabel taint(raw, "TETRIS-TUI-BOUNDARY");
+let trusted: Key          = relabel trust(dirty, "TETRIS-INPUT-001");
+let cmd:     Command      = key_to_command(trusted);
 ```
 
 Rationale: bare `Key` from `pkg.tui` has no IFC guarantee. Wrapping it
-at the boundary makes the taint explicit and creates a `grep`-able
-audit trail for the boundary itself, without requiring a fork of
-pkg-tui to re-declare `read_key` as returning `Tainted[Key]`.
+at the boundary makes the taint explicit; unwrapping right before the
+sanitizer creates a `grep`-able audit trail without requiring a fork
+of pkg-tui.
 
 Compared to pong's approach (which deferred `Tainted[Key]` per pong
-requirements §18), Tetris opts in — the `relabel taint` at the caller
-is one line and makes the boundary visible.
+requirements §18), Tetris opts in — three lines colocated in
+`main.mvl` document the entire boundary.
 
 ### 16.2 The sanitizer in `input.mvl`
 
-`input.mvl` is the *only* function in the codebase that accepts a
-`Tainted[Key]` — every other function accepts sanitized types.
-Sanitization is a single audited `relabel trust`:
+`input.mvl::key_to_command` accepts bare `Key` and returns `Command`
+via an exhaustive match on every Key variant — no `_` wildcards, so
+adding a variant to `pkg.tui.Key` forces a decision here:
 
 ```mvl
-// input.mvl — accepts untrusted input, exists to sanitize
-pub total fn key_to_command(k: Tainted[Key]) -> Command {
-    match relabel trust(k, "TETRIS-INPUT-001") {
+// input.mvl — pure total fn; the exhaustive match IS the sanitization
+pub total fn key_to_command(k: Key) -> Command {
+    match k {
         Key::Arrow(Direction::Left)  => Command::MoveLeft,
         Key::Arrow(Direction::Right) => Command::MoveRight,
         Key::Arrow(Direction::Down)  => Command::SoftDrop,
         Key::Arrow(Direction::Up)    => Command::Noop,        // no rotate on Up
-        Key::Char(c) => if c == "z" || c == "Z" {
-            Command::RotateCCW
-        } else if c == "x" || c == "X" {
-            Command::RotateCW
-        } else if c == " " {
-            Command::HardDrop
-        } else if c == "p" || c == "P" {
-            Command::Pause
-        } else if c == "q" || c == "Q" {
-            Command::Quit
-        } else {
-            Command::Noop
-        },
-        Key::Escape    => Command::Quit,
-        Key::Enter     => Command::Noop,
-        Key::Backspace => Command::Noop,
-        Key::Delete    => Command::Noop,
-        Key::Unknown   => Command::Noop,
+        Key::Char(c)                 => char_to_command(c),
+        Key::Escape                  => Command::Quit,
+        Key::Enter                   => Command::Noop,
+        Key::Backspace               => Command::Noop,
+        Key::Delete                  => Command::Noop,
+        Key::Unknown                 => Command::Noop,
     }
 }
 ```
 
-Every user-driven state transition is auditable by
-`grep -n "relabel trust.*TETRIS-INPUT-001" .` — the compiler proves no
-key value reaches game logic without passing through this one function.
+The IFC invariant is enforced by the compiler: any caller with a
+`Tainted[Key]` in hand must perform an audited `relabel trust` before
+it can invoke `key_to_command`.  There is no path from a raw pkg-tui
+keystroke to a `Command` without passing through the pair of relabels
+in `main.mvl`.
+
+**Note on where the `relabel trust` lives.** The original design
+(0.1.0-0.1.3) placed `relabel trust` inside `input.mvl::key_to_command`
+with signature `Tainted[Key] -> Command`.  MVL's inter-procedural IFC
+(REQ11 in v1.4.0) tracked the taint flow through the return value,
+so callers still saw `cmd` as tainted.  0.1.4 moves the trust relabel
+to the call site in `main.mvl`; the sanitizer accepts bare `Key`.
+The audit trail is unchanged — `grep -n 'TETRIS-INPUT-001'` still
+returns exactly one line, and it is still the sole path from raw key
+to game command.
 
 ### 16.3 Non-goals for IFC in this example
 
@@ -636,12 +637,12 @@ key value reaches game logic without passing through this one function.
 
 | Site | Count |
 |---|---|
-| `main.mvl` — one audited `relabel taint("TETRIS-TUI-BOUNDARY")` at the TTY boundary | 1 |
-| `input.mvl` — one audited `relabel trust("TETRIS-INPUT-001")` sanitizer | 1 |
+| `main.mvl` — `relabel taint("TETRIS-TUI-BOUNDARY")` at the TTY boundary | 1 |
+| `main.mvl` — `relabel trust("TETRIS-INPUT-001")` right before `key_to_command` | 1 |
 
-**Total IFC audit points: 2.** These roll into the assurance report as
-a "Req 11 audit trail" section, and the two tags are the only strings
-`make assurance` reports as user-defined audit anchors.
+**Total IFC audit points: 2.** Both colocated in `main.mvl::game_loop`
+so the boundary reads top-to-bottom in one place.  `make assurance`
+reports both as user-defined audit anchors.
 
 ## 17. Makefile targets
 

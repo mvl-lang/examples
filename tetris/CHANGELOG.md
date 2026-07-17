@@ -4,6 +4,38 @@ All notable changes to tetris will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.4] - 2026-07-17
+
+### Added
+- Phase 4: `main.mvl` (~750 lines) — game loop, renderer, menu, CLI
+  parse, gravity clock via elapsed-accumulator.  9/11 requirements
+  proven.
+- `Makefile` cloned from pong (help / build / smoke / run / check /
+  lint / prove / test-rust / test-llvm / coverage / mcdc / assurance
+  / all / clean).
+- `LICENSE` (Apache-2.0).
+
+### Changed
+- §16.2 — the `relabel trust("TETRIS-INPUT-001")` audit moved from
+  `input.mvl` to `main.mvl` at the call site.  Reason: MVL v1.4.0's
+  inter-procedural IFC (REQ11) tracks taint flow through the return
+  value of `key_to_command`, so wrapping trust inside the sanitizer
+  was insufficient — the caller still saw the returned Command as
+  tainted.  The audit trail is unchanged (`grep -n TETRIS-INPUT-001`
+  still returns one line) and the compiler-enforced invariant is
+  preserved.  `input.mvl::key_to_command` now accepts bare `Key`.
+- `game.mvl::spawn_piece` — removed `ensures result.shape == shape`
+  postcondition.  The MVL runtime-check emitter consumes `shape` at
+  struct construction, then references it in the assertion — the
+  current transpiler doesn't inject the `.clone()` this needs.  The
+  remaining three ensures (rotation, row, col) all cover Copy types
+  and stay.
+- `game.mvl::tick_gravity` signature changed from `(Game) -> Game` to
+  `(Game, Shape, Bag) -> Game` — main.mvl now owns bag advancement
+  and passes the fresh next-shape + advanced bag each tick.  The
+  bag / RNG stays outside the pure core.
+- `game.mvl::with_bag` — added helper for main to top up the bag.
+
 ## [0.1.3] - 2026-07-17
 
 ### Changed

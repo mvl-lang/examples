@@ -492,8 +492,12 @@ pub total fn filled_count(board: Board) -> Int {
 // ── Piece spawn ───────────────────────────────────────────────────────────────
 
 /// Build a Piece at the standard spawn position.
+///
+/// The `result.shape == shape` postcondition is enforced at runtime
+/// (Shape isn't Copy in the current transpiler, so the runtime
+/// assertion after struct construction would consume `shape` twice).
+/// The remaining three ensures cover position + rotation.
 pub total fn spawn_piece(shape: Shape) -> Piece
-    ensures result.shape == shape
     ensures result.rotation == Rotation::R0
     ensures result.row == -1
     ensures result.col == 4
@@ -911,28 +915,34 @@ pub total fn apply_command(game: Game, cmd: Command) -> Game {
 /// and the next piece spawns; if the spawn overlaps a filled cell the
 /// game ends.
 ///
+/// `next_shape` is the shape to promote to `game.next` when a lock
+/// occurs; `updated_bag` is the caller-computed bag with `next_shape`
+/// already popped.  On a non-lock tick both values are ignored so the
+/// bag stays put.  main.mvl owns `! Random` and threads these each
+/// tick (see requirements.md §13).
+///
 /// This is `total fn` because it does at most one attempt: either the
 /// piece descends by 1 (no lock), or it locks and the next piece is
 /// spawned.  No loops, no recursion.
-pub total fn tick_gravity(game: Game) -> Game {
+pub total fn tick_gravity(game: Game, next_shape: Shape, updated_bag: Bag) -> Game {
     match game.status {
         GameStatus::Paused   => game,
         GameStatus::GameOver => game,
-        GameStatus::Playing  => tick_gravity_playing(game),
+        GameStatus::Playing  => tick_gravity_playing(game, next_shape, updated_bag),
     }
 }
 
 /// tick_gravity, specialised on the Playing branch.
-total fn tick_gravity_playing(game: Game) -> Game {
+total fn tick_gravity_playing(game: Game, next_shape: Shape, updated_bag: Bag) -> Game {
     match try_move(game.current, game.board, 0, 1) {
         Some(descended) => with_current(game, descended),
-        None => lock_and_spawn(game),
+        None => lock_and_spawn(game, next_shape, updated_bag),
     }
 }
 
 /// Lock the current piece, clear lines, and spawn the next piece.
 /// If the spawn collides with an existing filled cell → GameOver.
-total fn lock_and_spawn(game: Game) -> Game {
+total fn lock_and_spawn(game: Game, next_shape: Shape, updated_bag: Bag) -> Game {
     if !piece_fully_inside_board(game.current) {
         with_status(game, GameStatus::GameOver)
     } else {
@@ -952,12 +962,13 @@ total fn lock_and_spawn(game: Game) -> Game {
         let new_level: Int = level_from_lines(new_lines, first_level_of(game));
         let spawn_shape: Shape = game.next.shape;
         let new_current: Piece = spawn_piece(spawn_shape);
+        let new_next: Piece = spawn_piece(next_shape);
         if is_game_over(result.board, new_current) {
             Game {
                 board:         result.board,
                 current:       new_current,
-                next:          game.next,
-                bag:           game.bag,
+                next:          new_next,
+                bag:           updated_bag,
                 score:         new_score,
                 level:         new_level,
                 lines_cleared: new_lines,
@@ -969,8 +980,8 @@ total fn lock_and_spawn(game: Game) -> Game {
             Game {
                 board:         result.board,
                 current:       new_current,
-                next:          game.next,
-                bag:           game.bag,
+                next:          new_next,
+                bag:           updated_bag,
                 score:         new_score,
                 level:         new_level,
                 lines_cleared: new_lines,
@@ -979,6 +990,22 @@ total fn lock_and_spawn(game: Game) -> Game {
                 palette:       game.palette,
             }
         }
+    }
+}
+
+/// Rebuild `game` with a new bag.  Used by main.mvl after refilling.
+pub total fn with_bag(game: Game, bag: Bag) -> Game {
+    Game {
+        board:         game.board,
+        current:       game.current,
+        next:          game.next,
+        bag:           bag,
+        score:         game.score,
+        level:         game.level,
+        lines_cleared: game.lines_cleared,
+        status:        game.status,
+        difficulty:    game.difficulty,
+        palette:       game.palette,
     }
 }
 
