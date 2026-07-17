@@ -1,0 +1,253 @@
+// models.mvl — PURE domain types for tetris.
+//
+// No effects, no extern, no I/O.  Every constraint that the prover will
+// discharge starts here as a refinement or invariant on a type.
+//
+// Demonstrates:
+//   1. Req 1  (Type Safety):   Shape, Rotation, Cell, Pos, Offset, Piece,
+//                              Board, Bag, ClearResult, Game, Config as
+//                              struct/enum types — no primitive obsession
+//   2. Req 3  (Exhaustiveness): every enum is closed and matched
+//                               exhaustively in game.mvl / input.mvl
+//   3. Req 4  (Null):           Option[Piece] returned by try_move /
+//                               try_rotate (see game.mvl); Command::Noop
+//                               is the "no useful key" sentinel
+//   4. Req 7  (Effects):       zero effect annotations — this file is pure
+//   5. Req 8  (Termination):   all types; no fns here so trivially total
+//   6. Req 10 (Refinements):   field bounds on every coordinate, score,
+//                              level, lines counter, start_level;
+//                              `with invariant` on Game
+//   7. Req 11 (IFC):           no labels declared here — the Tainted[Key]
+//                              boundary lives at input.mvl / main.mvl
+//                              (see requirements.md §16)
+//
+// See requirements.md for the full contract catalogue.
+//
+// Assurance note: 0 extern blocks.
+
+// ── Board geometry constants (requirements.md §20.1) ──────────────────────────
+
+/// Visible playfield height, in rows.  Classic Tetris Guideline value.
+pub const BOARD_ROWS: Int = 20;
+
+/// Visible playfield width, in columns.  Classic Tetris Guideline value.
+pub const BOARD_COLS: Int = 10;
+
+/// Uniform spawn row for every shape.  Row -1 places the piece one row
+/// above the visible playfield so its bottom cells enter row 0 on the
+/// first gravity tick.
+pub const SPAWN_ROW: Int = -1;
+
+/// Center-left column at spawn — 4 for a 10-wide board so the piece
+/// straddles columns 4..7 (or 3..6 depending on shape geometry).
+pub const SPAWN_COL: Int = 4;
+
+/// Every tetromino has exactly 4 cells.
+pub const PIECE_CELLS: Int = 4;
+
+/// SRS kick tests per rotation — always 5 for J/L/S/T/Z/I; 1 for O.
+pub const KICK_TESTS: Int = 5;
+
+/// Tetris Guideline 7-bag: each of the seven shapes appears exactly
+/// once per bag of seven draws.
+pub const BAG_SIZE: Int = 7;
+
+// ── Refinement bounds (requirements.md §20.2) ─────────────────────────────────
+
+// Values used inline in refinement predicates.  Named as constants so
+// `grep` finds every use and code review can reason about them, even
+// though the compiler currently requires the literal at the refinement
+// site itself (same limitation as pong).
+
+/// Minimum row across all uses of `Pos` — spawn zone + kick overshoot.
+pub const ROW_MIN: Int = -4;
+
+/// Maximum row across all uses of `Pos` — visible + kick overshoot.
+pub const ROW_MAX: Int = 22;
+
+/// Minimum column across all uses of `Pos` — left wall-kick overshoot.
+pub const COL_MIN: Int = -2;
+
+/// Maximum column across all uses of `Pos` — right wall-kick overshoot.
+pub const COL_MAX: Int = 11;
+
+/// Score cap — 6-digit HUD.  Reaching 999999 in real play is unlikely
+/// but the bound lets the prover discharge `score >= 0` monotonicity.
+pub const SCORE_CAP: Int = 999999;
+
+/// Lines-cleared cap — 3-digit HUD.
+pub const LINES_CAP: Int = 999;
+
+/// Minimum level — the game starts at 1.
+pub const LEVEL_MIN: Int = 1;
+
+/// Maximum level — classic 20-level cap; gravity floors at
+/// `GRAVITY_MS_MIN` (declared in game.mvl).
+pub const LEVEL_MAX: Int = 20;
+
+// ── Shape and rotation ────────────────────────────────────────────────────────
+
+/// The seven tetrominoes.  Each shape has four rotation states (below);
+/// piece geometry (which cells are filled) is a function of `(shape,
+/// rotation)` defined in `game.mvl::piece_cells`.
+pub type Shape = enum { I, O, T, S, Z, L, J }
+
+/// Four discrete rotation states.  R0 is the spawn orientation; CW
+/// rotation advances R0 → R90 → R180 → R270 → R0; CCW is the reverse.
+pub type Rotation = enum { R0, R90, R180, R270 }
+
+// ── Board cells ───────────────────────────────────────────────────────────────
+
+/// A single board cell.  `Empty` for open, `Filled(shape)` for occupied.
+/// The `shape` payload lets the renderer colour locked cells by their
+/// original piece (per Tetris Guideline convention).
+pub type Cell = enum {
+    Empty,
+    Filled(Shape),
+}
+
+// ── Positions and offsets ─────────────────────────────────────────────────────
+
+/// Absolute board position.  Refined bounds cover the visible playfield
+/// plus a small buffer for spawns and wall-kick overshoots.
+///
+/// The bounds are wider than the visible 10 × 20 board on purpose —
+/// see requirements.md §6.  Callers use `is_wall` / collision checks
+/// to detect out-of-bounds; refinements just keep values sane.
+pub type Pos = struct {
+    row: Int where self >= -4 && self <= 22,
+    col: Int where self >= -2 && self <= 11,
+}
+
+/// Shape-local cell / SRS kick offset.  The refinement covers both:
+///   - piece cells:    drow, dcol in [0..3]
+///   - SRS kick tests: drow, dcol in [-2..2]
+pub type Offset = struct {
+    drow: Int where self >= -2 && self <= 3,
+    dcol: Int where self >= -2 && self <= 3,
+}
+
+// ── Piece ─────────────────────────────────────────────────────────────────────
+
+/// A falling tetromino: a shape at a rotation state anchored at (row, col).
+///
+/// Absolute cell positions are `piece.row + off.drow, piece.col + off.dcol`
+/// for each `off` in `piece_cells(shape, rotation)` (game.mvl).
+pub type Piece = struct {
+    shape:    Shape,
+    rotation: Rotation,
+    row:      Int where self >= -4 && self <= 22,
+    col:      Int where self >= -2 && self <= 11,
+}
+
+// ── Board ─────────────────────────────────────────────────────────────────────
+
+/// The playfield.  `cells[row][col]` is the state of the cell at (row, col),
+/// where rows grow downward from 0 (top) to 19 (bottom) and cols grow
+/// rightward from 0 (left) to 9 (right).
+///
+/// A struct wrapper (rather than a bare `List[List[Cell]]`) lets game.mvl
+/// attach helpers as pure fns while keeping the type nominal.
+pub type Board = struct {
+    cells: List[List[Cell]],
+}
+
+// ── Bag (7-piece RNG state) ───────────────────────────────────────────────────
+
+/// A 7-bag: a list of shapes remaining in the current bag.  Refilled and
+/// reshuffled when empty (see game.mvl::refill_bag).
+pub type Bag = struct {
+    pieces: List[Shape],
+}
+
+// ── Game status ───────────────────────────────────────────────────────────────
+
+/// Game lifecycle status.  Playing → (Paused → Playing)* → GameOver.
+pub type GameStatus = enum {
+    Playing,
+    Paused,
+    GameOver,
+}
+
+// ── Command (input alphabet) ──────────────────────────────────────────────────
+
+/// A sanitized user command.  Produced by `input.mvl::key_to_command`
+/// from a `Tainted[Key]` (requirements.md §16); consumed by
+/// `game.mvl::apply_command`.
+///
+/// `Noop` is the "no useful key this tick" sentinel — no `Option[Command]`
+/// needed at call sites.
+pub type Command = enum {
+    MoveLeft,
+    MoveRight,
+    SoftDrop,
+    HardDrop,
+    RotateCW,
+    RotateCCW,
+    Pause,
+    Quit,
+    Noop,
+}
+
+// ── Palette and difficulty ────────────────────────────────────────────────────
+
+/// Visual palette.  Selected via menu or `--palette {bw,color}`.
+pub type Palette = enum {
+    BlackWhite,     // per-shape glyph, all White
+    Color,          // per-shape ANSI foreground colour
+}
+
+/// Gravity / lock-delay policy.  Selected via menu or `--difficulty
+/// {easy,normal,hard}`.  Concrete gravity_ms and lock_delay_ms values
+/// live in game.mvl.
+pub type Difficulty = enum {
+    Easy,
+    Normal,
+    Hard,
+}
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
+/// Parsed CLI + menu result.  Threaded into `new_game` in game.mvl.
+///
+/// `start_level` bounds match §20.4's `START_LEVEL_MIN..MAX`; classic
+/// Tetris caps user-selectable start at 15 (level 20 is only reachable
+/// through play).
+pub type Config = struct {
+    palette:     Palette,
+    difficulty:  Difficulty,
+    start_level: Int where self >= 1 && self <= 15,
+}
+
+// ── ClearResult ───────────────────────────────────────────────────────────────
+
+/// Result of `game.mvl::clear_lines(board)`: the pruned board plus a
+/// count of cleared rows (0..4).
+pub type ClearResult = struct {
+    board:   Board,
+    cleared: Int where self >= 0 && self <= 4,
+}
+
+// ── Game ──────────────────────────────────────────────────────────────────────
+
+/// Full game state.  Threaded through every `total fn` in game.mvl;
+/// the game loop in main.mvl updates it explicitly.
+///
+/// Score / level / lines refinement bounds match §20.2's caps.
+///
+/// The `with invariant` clause `self.level >= 1` is discharged from the
+/// level refinement (`self >= 1 && self <= 20`) — it exists to
+/// demonstrate Req 10 part 3 and gives the prover a compound
+/// obligation at every Game construction site.
+pub type Game = struct {
+    board:         Board,
+    current:       Piece,
+    next:          Piece,
+    bag:           Bag,
+    score:         Int where self >= 0 && self <= 999999,
+    level:         Int where self >= 1 && self <= 20,
+    lines_cleared: Int where self >= 0 && self <= 999,
+    status:        GameStatus,
+    difficulty:    Difficulty,
+    palette:       Palette,
+} with invariant self.level >= 1
