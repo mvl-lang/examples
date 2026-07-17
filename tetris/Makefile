@@ -14,7 +14,7 @@
 
 .PHONY: help version install build run run-verbose smoke
 .PHONY: fmt check lint prove
-.PHONY: test-rust test-llvm coverage mcdc
+.PHONY: test test-rust test-bdd test-llvm coverage mcdc
 .PHONY: assurance assurance-verbose
 .PHONY: all clean
 
@@ -70,10 +70,16 @@ prove: install ## Prove per-call-site refinement layer breakdown
 
 # ── Testing ────────────────────────────────────────────────────────────────────
 
-test-rust: install ## Run unit tests (models_test / game_test / input_test)
+test: install ## Run all test suites (unit + BDD) via the Rust backend
 	$(MVL) test $(MVL_FLAGS) $(DIR)
 
-test-llvm: install ## Run tests via LLVM backend
+test-bdd: install ## Run BDD scenario suite only (bdd_test.mvl)
+	$(MVL) test $(MVL_FLAGS) $(DIR)bdd_test.mvl
+
+test-rust: install ## Alias for `test` — run all suites via the Rust backend
+	$(MVL) test $(MVL_FLAGS) $(DIR)
+
+test-llvm: install ## Run all suites via the LLVM backend
 	$(MVL) test $(MVL_FLAGS) $(DIR) --backend=llvm
 
 coverage: install ## Generate branch coverage report
@@ -92,7 +98,7 @@ assurance-verbose: install ## Generate verbose assurance report
 
 # ── Full quality gate ─────────────────────────────────────────────────────────
 
-all: check test-rust coverage mcdc prove assurance ## Full CI-equivalent quality gate
+all: check test test-bdd coverage mcdc prove assurance ## Full CI-equivalent quality gate
 
 # ── Clean ──────────────────────────────────────────────────────────────────────
 
