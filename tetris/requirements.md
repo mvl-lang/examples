@@ -4,7 +4,7 @@ Formal spec for `tetris` (in the `mvl-lang/examples` repo) — the classic
 falling-block puzzle, built to demonstrate all 11 MVL requirements with
 heavy prover load and full Super Rotation System (SRS) rotation logic.
 
-Version: 0.1.1 (draft, pre-implementation)
+Version: 0.1.2 (draft, phase 1 landed)
 Last updated: 2026-07-17
 
 ---
@@ -204,8 +204,19 @@ ensures result.row == piece.row || result.row == piece.row + 1
 
 ### 7.7 `lock_piece(piece, board) -> Board`
 ```mvl
-// Stamps the piece's 4 filled cells into `board`.
-ensures result.filled_count == board.filled_count + 4
+// Stamps the piece's 4 filled cells into `board`.  The precondition
+// asserts every cell of the piece falls inside the visible playfield
+// (rows 0..19, cols 0..9) — game.mvl only calls lock_piece after
+// try_move / hard_drop has confirmed the piece rests at a valid
+// stopped position.
+//
+// `piece_fully_inside_board` is a total helper that iterates the four
+// piece_cells offsets and checks each translated cell against the
+// visible board (not the buffer zone).  Callers on the game-over
+// path use `is_game_over` instead — a spawn collision is detected
+// before lock_piece is ever invoked.
+requires piece_fully_inside_board(piece)
+ensures  result.filled_count == board.filled_count + 4
 ```
 
 ### 7.8 `clear_lines(board) -> ClearResult`
@@ -218,10 +229,11 @@ ensures result.board.filled_count == board.filled_count - result.cleared * 10
 ### 7.9 `score_for_clear(cleared, level) -> Int`
 ```mvl
 // Guideline single/double/triple/tetris awards, level-scaled.
+// Upper bound: cleared == 4 (Tetris) at level == 20 → 800 * 20 = 16000.
 requires cleared >= 0 && cleared <= 4
 requires level >= 1 && level <= 20
 ensures  result >= 0
-ensures  result <= 12000                    // max is Tetris (800) * 20 (max level) = 16000... capped 12000 for level 15
+ensures  result <= 16000
 ensures  cleared == 0  implies result == 0
 ensures  cleared == 1  implies result == 100 * level
 ensures  cleared == 2  implies result == 300 * level
@@ -290,17 +302,28 @@ pub type Game = struct {
     board:         Board,
     current:       Piece,
     next:          Piece,
+    bag:           Bag,
     score:         Int where self >= 0 && self <= 999999,
     level:         Int where self >= 1 && self <= 20,
     lines_cleared: Int where self >= 0 && self <= 999,
     status:        GameStatus,
     difficulty:    Difficulty,
     palette:       Palette,
-} with invariant self.level >= 1
+} with invariant self.current.row <= 22 && self.next.row <= 22
 ```
 
-The `Game` invariant is trivially discharged from the level refinement
-but exists to demonstrate the `with invariant` clause per Req 10, part 3.
+The `Game` invariant asserts that both the currently falling piece and
+the previewed next piece stay within the refined `Pos.row` bound.  It's
+not trivially discharged from the per-field refinements because the
+prover otherwise treats `Piece.row` as an unrelated integer once it
+crosses a struct boundary — the compound invariant forces a
+cross-field obligation at every `Game { ... }` construction site.
+
+Rejected alternatives:
+- `self.level >= 1` — trivially discharged from the level refinement.
+- `piece_shape_matches_current(...)` — genuine state coherence but
+  requires a helper fn declared before `Game` (chicken-and-egg for
+  models.mvl).  Moves to §7 as a contract on `apply_command` instead.
 
 ## 9. Test matrix
 
@@ -441,12 +464,56 @@ Following the Tetris Guideline, pieces are drawn from a *7-bag*: each
 of the seven shapes appears exactly once per bag of seven draws, in a
 uniformly-random order. The bag is refilled and reshuffled when empty.
 
-- `models.mvl` declares `pub type Bag = struct { pieces: List[Shape] }`
-  with a refinement `where len(self.pieces) <= 7`.
-- `game.mvl` provides `pub total fn draw_from_bag(bag) -> (Shape, Bag)`
-  and `pub total fn refill_bag(seed) -> Bag` — the shuffle *permutation*
-  is computed purely from the seed; only the seed generation touches
-  `! Random` (in `main.mvl`).
+### 13.1 Types
+
+- `models.mvl` declares `pub type Bag = struct { pieces: List[Shape] }`.
+  The list has 0..7 entries; refilling always pushes 7.
+
+### 13.2 Seed flow
+
+The 7-bag needs entropy for the shuffle *permutation*, but the game
+state must stay pure so that `apply_command` / `tick_gravity` don't
+inherit `! Random`.  We split the two responsibilities cleanly:
+
+- `main.mvl` owns `! Random`.  Each time the current bag is drained,
+  `main.mvl` calls `random_seed()` (`! Random`), producing a fresh
+  `Int` seed, and hands it to the pure refill.
+- `game.mvl` owns the permutation.  `refill_bag(seed: Int) -> Bag` is
+  `total fn` — a Fisher–Yates shuffle of `[I, O, T, S, Z, L, J]`
+  parameterised by `seed`; identical seeds → identical bags.
+- `draw_from_bag(bag: Bag) -> Option[(Shape, Bag)]` is `total fn` and
+  returns `None` on an empty bag; the caller either uses an existing
+  non-empty bag or refills with a fresh seed.
+
+**`Game` does NOT carry a seed field.**  The seed is transient — it
+lives just long enough to produce one refill, then is discarded.
+Storing a "next_seed" in `Game` would make the whole struct depend on
+an externally-controlled value, which is exactly what `! Random`
+already models better.
+
+### 13.3 Loop pattern
+
+```mvl
+// main.mvl — game loop, when a piece locks and we need a new next:
+let (shape, bag2): (Shape, Bag) = match draw_from_bag(game.bag) {
+    Some(pair) => pair,
+    None => {
+        let seed: Int = random_seed();            // ! Random
+        let fresh: Bag = refill_bag(seed);        // pure
+        draw_from_bag(fresh).expect_or_default(...)
+    }
+};
+let game2: Game = Game { bag: bag2, next: spawn_piece(shape), ...game };
+```
+
+### 13.4 Contract impact (Req 10)
+
+- `refill_bag(seed) -> Bag` — `ensures result.pieces.len() == 7`.
+- `draw_from_bag(bag) -> Option[(Shape, Bag)]` — `ensures match result {
+  Some((_, b)) => b.pieces.len() == bag.pieces.len() - 1, None =>
+  bag.pieces.len() == 0 }`.
+- No contract references a `seed` field on `Game`; the seed is a
+  parameter of `refill_bag` only.
 
 ## 14. Rendering
 
@@ -717,6 +784,18 @@ labels) stay inline because they aren't reused.
 
 ## 21. Version history
 
+- **0.1.2** (2026-07-17) — Post-phase-1 review fixes.
+  - §7.7 `lock_piece` gains a `piece_fully_inside_board` precondition —
+    clarifies that game-over path uses `is_game_over` instead of
+    lock_piece for spawn collisions.
+  - §7.9 `score_for_clear` upper bound raised from 12000 to 16000 —
+    matches the real maximum (Tetris × level 20 = 800 × 20).
+  - §8 Game `with invariant` strengthened from the trivial
+    `self.level >= 1` to `self.current.row <= 22 && self.next.row <= 22`,
+    which forces a cross-field obligation at every construction site.
+  - §13 rewritten to spell out seed flow — Game does NOT carry a seed
+    field; `refill_bag(seed)` is pure, `random_seed()` in main is the
+    only `! Random` site.  New §13.4 contract summary.
 - **0.1.1** (2026-07-17) — Add §20 explicit-constants catalogue; every
   named magic number listed with its file and purpose.
 - **0.1.0** (2026-07-17) — Initial draft.  All 11-requirement mapping,

@@ -235,10 +235,12 @@ pub type ClearResult = struct {
 ///
 /// Score / level / lines refinement bounds match §20.2's caps.
 ///
-/// The `with invariant` clause `self.level >= 1` is discharged from the
-/// level refinement (`self >= 1 && self <= 20`) — it exists to
-/// demonstrate Req 10 part 3 and gives the prover a compound
-/// obligation at every Game construction site.
+/// The `with invariant` clause forces a compound cross-field
+/// obligation at every construction site: both the currently-falling
+/// piece and the previewed next piece must stay within the refined
+/// `Pos.row` bound.  Non-trivial because the prover otherwise treats
+/// `Piece.row` as opaque once it crosses the outer Game struct
+/// boundary.  See requirements.md §8.
 pub type Game = struct {
     board:         Board,
     current:       Piece,
@@ -250,4 +252,4 @@ pub type Game = struct {
     status:        GameStatus,
     difficulty:    Difficulty,
     palette:       Palette,
-} with invariant self.level >= 1
+} with invariant self.current.row <= 22 && self.next.row <= 22
