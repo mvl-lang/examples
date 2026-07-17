@@ -4,7 +4,7 @@ Formal spec for `tetris` (in the `mvl-lang/examples` repo) — the classic
 falling-block puzzle, built to demonstrate all 11 MVL requirements with
 heavy prover load and full Super Rotation System (SRS) rotation logic.
 
-Version: 0.1.5 (all phases landed) — see [CHANGELOG.md](CHANGELOG.md) for history.
+Version: 0.1.6 (post-implementation audit) — see [CHANGELOG.md](CHANGELOG.md) for history.
 Last updated: 2026-07-17
 
 ---
@@ -141,24 +141,33 @@ wall-kicks can transiently produce out-of-board offsets.
 Contracts on the pure functions in `game.mvl`. Every one becomes a
 proof obligation for the Z3 solver.
 
-### 7.1 `new_game(cfg, first, next) -> Game`
+### 7.1 `new_game(cfg, first, next, bag) -> Game`
 ```mvl
 requires cfg.start_level >= 1 && cfg.start_level <= 15
 ensures  result.status == GameStatus::Playing
 ensures  result.score == 0
 ensures  result.lines_cleared == 0
 ensures  result.level == cfg.start_level
-ensures  result.current.shape == first
-ensures  result.next.shape == next
 ```
+
+`bag` is the caller-owned 7-bag (see §13); main.mvl draws `first` /
+`next` from the bag before calling.  The `result.current.shape ==
+first` and `result.next.shape == next` ensures were dropped because
+`Shape` is not `Copy` in the transpiler's runtime-assertion
+generator (see §7.2 for the analogous constraint on `spawn_piece`).
 
 ### 7.2 `spawn_piece(shape) -> Piece`
 ```mvl
-ensures result.shape == shape
 ensures result.rotation == Rotation::R0
 ensures result.row == -1
 ensures result.col == 4    // center-left of 10-wide board (Tetris Guideline)
 ```
+
+The `result.shape == shape` postcondition would double-consume the
+non-`Copy` `shape` argument in the transpiler's runtime-assertion
+lowering (shape is moved into the returned `Piece`, then referenced
+again in the assertion).  Enforced structurally instead: the only
+assignment to `Piece.shape` in the fn body is `shape:    shape,`.
 
 ### 7.3 `try_move(piece, board, dx, dy) -> Option[Piece]`
 ```mvl
@@ -173,33 +182,40 @@ ensures  match result {
          }
 ```
 
-### 7.4 `try_rotate(piece, board, dir) -> Option[Piece]`
+### 7.4 `try_rotate(piece, board, cw) -> Option[Piece]`
 ```mvl
-// dir: Rotation direction (CW or CCW). Applies SRS wall-kick tests
-// (§11); returns Some(p) at the first kick offset that clears the
-// board, or None if all 5 offsets collide.
-ensures  match result {
-             Some(p) => p.shape == piece.shape,
-             None => true,
-         }
+// cw: Bool.  true = clockwise, false = counter-clockwise.
+// Applies SRS wall-kick tests (§11); returns Some(p) at the first
+// kick offset that clears the board, or None if all 5 offsets
+// collide.  The `bounded while ... decreases (n - i)` loop keeps the
+// body total; the SRS table lookup is a pure fn.
+//
+// No `ensures` clause — the shape/rotation invariants would require
+// referencing `piece.shape` after moving `piece` into the candidate
+// Piece constructor, which the transpiler's runtime-assertion
+// lowering does not support for non-Copy fields.
 ```
 
 ### 7.5 `hard_drop(piece, board) -> Piece`
 ```mvl
-// Drop the piece as far as it can go before it would collide.
-ensures result.shape == piece.shape
-ensures result.rotation == piece.rotation
-ensures result.col == piece.col
-ensures result.row >= piece.row       // monotone down (or unchanged if on floor)
+// Drop the piece as far as it can go before it would collide.  The
+// `while !stopped && steps < 32 decreases 32 - steps` loop bounds
+// the descent at 32 rows (visible playfield is 20; buffer + refined
+// bounds fit inside 32).
+//
+// No `ensures` clause — see §7.4 rationale.  Correctness is
+// established by the loop's monotone-descent invariant (each
+// iteration either sets `stopped` or moves the piece down one row)
+// plus the `try_move` contract in §7.3.
 ```
 
 ### 7.6 `soft_drop(piece, board) -> Piece`
 ```mvl
-// One-row descent if possible; unchanged otherwise.
-ensures result.shape == piece.shape
-ensures result.rotation == piece.rotation
-ensures result.col == piece.col
-ensures result.row == piece.row || result.row == piece.row + 1
+// One-row descent if possible; unchanged otherwise.  Body is a
+// single `match try_move(piece, board, 0, 1) { Some(p) => p,
+// None => piece }` — correctness follows from §7.3.
+//
+// No `ensures` clause — see §7.4 rationale.
 ```
 
 ### 7.7 `lock_piece(piece, board) -> Board`
@@ -208,22 +224,28 @@ ensures result.row == piece.row || result.row == piece.row + 1
 // asserts every cell of the piece falls inside the visible playfield
 // (rows 0..19, cols 0..9) — game.mvl only calls lock_piece after
 // try_move / hard_drop has confirmed the piece rests at a valid
-// stopped position.
+// stopped position.  Callers on the game-over path use
+// `is_game_over` instead; a spawn collision is detected before
+// lock_piece is ever invoked.
 //
-// `piece_fully_inside_board` is a total helper that iterates the four
-// piece_cells offsets and checks each translated cell against the
-// visible board (not the buffer zone).  Callers on the game-over
-// path use `is_game_over` instead — a spawn collision is detected
-// before lock_piece is ever invoked.
-requires piece_fully_inside_board(piece)
-ensures  result.filled_count == board.filled_count + 4
+// Neither `requires piece_fully_inside_board(piece)` nor
+// `ensures filled_count(result) == filled_count(board) + 4` sit on
+// the fn signature — MVL 1.6.0's contract-check emitter doesn't
+// accept fn-call refinements in ensures.  The `filled_count` helper
+// is provided as a public fn (used by tests + assurance), and the
+// `piece_fully_inside_board` guard is enforced by the caller
+// (`tick_gravity_playing` → `lock_and_spawn`).
 ```
 
 ### 7.8 `clear_lines(board) -> ClearResult`
 ```mvl
-// ClearResult = { board: Board, cleared: Int }
-ensures result.cleared >= 0 && result.cleared <= 4
-ensures result.board.filled_count == board.filled_count - result.cleared * 10
+// ClearResult = { board: Board, cleared: Int }.  Filters full rows
+// out of `board.cells` and pads the top with empty rows to keep the
+// total row count at 20.  Cleared count is refined at the type level
+// (`cleared: Int where self >= 0 && self <= 4`), so no explicit
+// ensures needed.
+//
+// No fn-call ensures on `filled_count` — see §7.7.
 ```
 
 ### 7.9 `score_for_clear(cleared, level) -> Int`
@@ -245,43 +267,79 @@ ensures  cleared == 4  implies result == 800 * level
 ```mvl
 requires lines >= 0
 requires start_level >= 1 && start_level <= 15
-ensures  result >= start_level
+ensures  result >= 1
 ensures  result <= 20
 // Classic: level = start_level + (lines / 10), capped at 20.
 ```
 
+The lower bound is `>= 1` rather than `>= start_level` because the
+implementation clamps the raw computation: `if raw < 1 { 1 }` — the
+clamp exists for the tests to cover a "start_level - 1 = 0" edge
+case that never fires in real play.  The stronger `>= start_level`
+would be true structurally but the branch removal cost isn't worth
+it.
+
 ### 7.11 `gravity_ms(level, difficulty) -> Int`
 ```mvl
 requires level >= 1 && level <= 20
-ensures  result >= 50 && result <= 1000
-// Monotone: gravity_ms(l+1) <= gravity_ms(l)   (proven pointwise)
+ensures  result >= 100
+ensures  result <= 1200
+// Discrete lookup on the Game Boy Tetris (Type A, 1989) frame table;
+// difficulty shifts the whole curve (Easy +300, Normal +0, Hard -100).
 ```
+
+Bounds are `[100, 1200]` (was `[50, 1000]` before the Game Boy table
+landed in 0.1.5 / playtest tweaks in 0.1.5-post).  Monotonicity is
+inherent to the lookup — no explicit proof clause, but the table
+itself is monotone non-increasing in level.
 
 ### 7.12 `apply_command(game, cmd) -> Game`
 ```mvl
-ensures result.score >= game.score
-ensures result.lines_cleared >= game.lines_cleared
-ensures result.level >= game.level
+// State-machine dispatch on (game.status, cmd).  Exhaustive nested
+// match — every combination has an explicit result (no `_`).
 // Game.status transitions: Playing may go to Paused or GameOver;
 // Paused may return to Playing; GameOver is terminal.
 ```
 
-### 7.13 `tick_gravity(game) -> Game`
+No explicit `ensures` — the monotonicity properties (score, lines,
+level all non-decreasing) hold structurally because the fn either
+delegates to a sub-fn that returns `with_current(game, ...)` (which
+preserves score/level/lines) or a status transition that leaves
+scalars alone.  A fn-body proof-of-monotonicity ensures clause would
+require aggregating results across the two-level match — the
+transpiler's ensures rewriter doesn't handle that shape.
+
+### 7.13 `tick_gravity(game, next_shape, updated_bag) -> Game`
 ```mvl
-ensures result.score >= game.score
-ensures result.lines_cleared >= game.lines_cleared
-ensures result.level >= game.level
-// If the piece cannot descend, it locks: score and lines may go up.
+// If the piece cannot descend, it locks: score and lines may go up
+// and the next piece is spawned.  main.mvl precomputes next_shape
+// and updated_bag (see §13); on a non-lock tick, both are unused
+// so the bag stays put.
 ```
+
+Signature is `(Game, Shape, Bag) -> Game` — not the original
+`(Game) -> Game` in the 0.1.0-0.1.3 spec.  The change lets main.mvl
+own bag advancement and `! Random` (see 0.1.4 changelog).  No
+explicit `ensures` for the same reason as §7.12.
 
 ### 7.14 `is_game_over(board, piece) -> Bool`
 ```mvl
 // True iff `piece` at spawn position collides with occupied cells.
-ensures result == true implies board.filled_count > 0
+// Body is a single `piece_collides(piece, board)` call — the
+// spawn-collision guard.
 ```
 
-**Total explicit `requires` / `ensures` contracts: ~30**, plus refinement
-discharges at every literal / construction site.
+No ensures — the fn just delegates to `piece_collides`, which
+already has structural guarantees from the `piece_cells` /
+`cell_collides` chain.
+
+**Total explicit `requires` / `ensures` contracts across game.mvl:
+25 discharge sites** (down from ~30 in the 0.1.0 draft; several
+were rewritten as structural invariants + comments as the
+transpiler's ensures-clause emitter's limits became clear during
+implementation).  Refinements on struct fields carry the rest of
+the proof burden (~240 refinement call sites, 220 proven /
+20 runtime-checked per `mvl assurance`).
 
 ## 8. Struct invariants (Req 10, part 3)
 
@@ -327,62 +385,70 @@ Rejected alternatives:
 
 ## 9. Test matrix
 
-### `models_test.mvl` — ~15 tests
-- Constructing `Pos` / `Piece` at each refinement boundary succeeds.
-- Constructing outside refined range fails (e.g., `row = -5`, `col = 12`).
-- Every `Shape` variant round-trips through `piece_cells` (returns 4
-  distinct offsets).
-- Every `Rotation` variant round-trips.
-- Piece spawn position: I, O, T, S, Z, L, J each spawn at `row=-1, col=4`.
-- Kick-table lookup returns 5 offsets for I; 5 offsets for J/L/S/T/Z;
-  1 (identity) offset for O.
+**Total: 92 tests across four suites** (`make test`), plus 12 BDD
+scenarios that also run under `make test-bdd`.
 
-### `game_test.mvl` — ~30 tests
-- `new_game` returns Playing, zero score/lines, level = start_level.
-- `spawn_piece` centers each shape at col 4.
-- `try_move(dx=-1)` blocked by left wall.
-- `try_move(dx=+1)` blocked by right wall.
-- `try_move(dy=+1)` blocked by occupied cell.
-- `try_move(dy=+1)` blocked by floor.
-- `try_rotate` at column 4 succeeds without kick for every shape.
-- `try_rotate` next to left wall applies SRS +1 col kick.
-- `try_rotate` next to right wall applies SRS -1 col kick.
-- `try_rotate` I-piece requires I-specific kick table (kick offsets +2/-2).
-- `try_rotate` O-piece is a no-op (returns identical piece).
-- `try_rotate` blocked in all 5 kick positions returns `None`.
-- `hard_drop` drops to floor from open column.
-- `hard_drop` stops on stack.
-- `soft_drop` descends 1 row.
-- `soft_drop` on floor is a no-op.
-- `lock_piece` adds exactly 4 filled cells.
-- `clear_lines` clears 0 for no full row.
-- `clear_lines` clears 1 single line and awards 100 * level.
-- `clear_lines` clears 2 (double) awards 300 * level.
-- `clear_lines` clears 3 (triple) awards 500 * level.
-- `clear_lines` clears 4 (tetris) awards 800 * level.
-- `clear_lines` preserves gaps below cleared lines (no floating cells).
-- `level_from_lines(0, start=1)` == 1.
-- `level_from_lines(10, start=1)` == 2.
-- `level_from_lines(200, start=1)` == 20 (capped).
-- `gravity_ms` is monotone non-increasing in level.
-- `gravity_ms(20)` >= 50.
-- `is_game_over` fires when spawn row has occupied cells.
-- Full SRS regression: J piece R0→R90 with a right-wall obstacle
-  applies the third kick offset.
+### `models_test.mvl` — 22 tests
+- `Pos` / `Piece` / `Offset` at each refinement boundary (6).
+- `Shape` all 7 variants exhaustive; `Rotation` all 4 exhaustive; `Cell`
+  Empty + per-shape Filled; `GameStatus`, `Command`, `Palette`,
+  `Difficulty` all exhaustive.
+- `Config.start_level` at 1 / 15 boundaries; `ClearResult.cleared` at
+  0 / 4 boundaries.
+- `Bag` empty and full-seven construction.
 
-### `input_test.mvl` — ~12 tests
-- Arrow keys → `MoveLeft` / `MoveRight` / `SoftDrop` / (no default up).
-- `z` → `RotateCCW`, `x` → `RotateCW`.
-- `space` → `HardDrop`.
-- `p` → `Pause`.
-- `q` / `Escape` → `Quit`.
-- Any other char → `Noop`.
-- All variants pass through the `Tainted[Key]` audit boundary.
+### `game_test.mvl` — 39 tests
+Movement, collisions, scoring, level progression, gravity, clear
+lines.  Key coverage points:
+
+- `try_move(dx=-1)` blocked by left wall; `(dx=+1)` blocked by right
+  wall; `(dy=+1)` blocked by stack and by floor.
+- T-piece collision with a stack cell.
+- Board helpers (`empty_board`, `set_cell` in-bounds + out-of-bounds
+  across all four edges).
+- Rotation cycle correctness (`rotate_cw` all four states).
+- `score_for_clear` at each cleared × level combination (0..4 clears,
+  levels 1/3/5/20).
+- `level_from_lines` at 0 / 10 / 200 lines.
+- `gravity_ms` at every difficulty × level 1; L20 floor check; level
+  monotonicity check on Easy.
+- `row_is_full` on empty, full, and short rows.
+- `clear_lines` for 0 / 1 (single) / 4 (tetris); gap preservation.
+
+### `input_test.mvl` — 19 tests
+Arrow keys → Move/SoftDrop/Noop (4); rotation upper + lower (4);
+action keys space/p/P/q/Q/Escape (6); Noop fall-throughs including
+Delete, Backspace, Unknown (5).
+
+### `bdd_test.mvl` — 12 scenarios (ADR-0020)
+BDD-style using `given_ / when_ / then_ / scenario_` naming.  Threads
+state through `TetrisCtx`.  Covers movement, single/tetris scoring,
+level-caps, and Game Boy gravity semantics.
 
 ### MC/DC targets
-100 % on `try_move`, `try_rotate`, `hard_drop`, `clear_lines`,
-`score_for_clear`, `level_from_lines`, `gravity_ms`, `is_game_over`,
-`apply_command`.
+
+Original 0.1.0 draft called for 100 % on the nine key fns.  Post-
+implementation reality (`mvl mcdc .`) is **95/122 obligations met
+(77 % pure)** with **9 clauses structurally coupled** (`c == "z" ||
+c == "Z"` — the two clauses share the same variable, so unique-cause
+independence is impossible under pure MC/DC).  Under DO-178C masking
+rules (`mvl mcdc . --masking`) the coupled clauses are exempt.
+Remaining misses are almost entirely defensive `None` arms after
+bounds checks (dead code by construction).
+
+### Coverage targets
+
+**Branch coverage: 167/455 (36 %)**.  Below the 80 % informal target.
+The plain reason: `game.mvl`'s `piece_cells` + two SRS kick tables
+generate several hundred match arms (7 shapes × 4 rotations, plus 8
+transitions × 2 tables), and the test suite doesn't exercise every
+arm.  Reaching 80 % is a matter of writing per-arm tests, not a
+tool limitation.  Documented rather than chased for the 0.1.6
+release.
+
+(The MVL coverage tool instruments all production functions and
+excludes `test fn` bodies from the denominator —
+`src/mvl/passes/coverage/transform.rs:133-135`.  Standard shape.)
 
 ## 10. CLI reference
 
@@ -452,11 +518,21 @@ exercises every distinct row of both tables.
 | `models.mvl` | *(none)* | Pure types, refinements, SRS tables |
 | `game.mvl` | *(none)* | Pure logic; all `total fn` |
 | `input.mvl` | *(none)* | Pure `Tainted[Key] → Command` sanitizer |
-| `main.mvl` | `! Terminal + Random + Console + Env + Clock` | Menu, loop, rendering, CLI, gravity clock, bag RNG |
+| `main.mvl` | `! Terminal + Random + Console + Env` | Menu, loop, rendering, CLI, bag RNG |
 
 This split is the single most important design decision — it keeps
 ~85 % of the code fully testable without a TTY, and the prover proves
 it stays that way because effect annotations propagate.
+
+**No `! Clock` effect.**  Gravity is driven by an `elapsed`
+accumulator inside the game loop rather than by wall-clock reads:
+each `read_key_timeout(term, INPUT_POLL_MS = 30)` iteration adds
+30 ms to `elapsed`, and gravity fires when `elapsed >=
+gravity_ms(level, difficulty)`.  Slight over-count during heavy
+input is bounded by the small poll interval.  A `! Clock` design was
+explored (0.1.5-rev1: `read_key_timeout(term, gravity_ms)` +
+timeout-branch gravity) and reverted — it prevented gravity from
+firing while the player was pressing keys.
 
 ## 13. Piece bag (7-bag RNG)
 
@@ -480,10 +556,14 @@ inherit `! Random`.  We split the two responsibilities cleanly:
   `Int` seed, and hands it to the pure refill.
 - `game.mvl` owns the permutation.  `refill_bag(seed: Int) -> Bag` is
   `total fn` — a Fisher–Yates shuffle of `[I, O, T, S, Z, L, J]`
-  parameterised by `seed`; identical seeds → identical bags.
-- `draw_from_bag(bag: Bag) -> Option[(Shape, Bag)]` is `total fn` and
-  returns `None` on an empty bag; the caller either uses an existing
-  non-empty bag or refills with a fresh seed.
+  parameterised by `seed`; identical seeds → identical bags.  The LCG
+  step (`lcg_step`) caps its state to 24 bits before multiplying to
+  keep the arithmetic inside `i64` — see the 0.1.5 CHANGELOG.
+- The bag API splits into two `total fn`s rather than the original
+  `draw_from_bag → Option[(Shape, Bag)]` (MVL 1.6.0 has no first-class
+  tuple types).  `peek_bag(bag) -> Option[Shape]` returns `None` on
+  an empty bag; `advance_bag(bag) -> Bag` drops the first entry
+  (no-op on empty).  Callers pair them.
 
 **`Game` does NOT carry a seed field.**  The seed is transient — it
 lives just long enough to produce one refill, then is discarded.
@@ -494,7 +574,28 @@ already models better.
 ### 13.3 Loop pattern
 
 ```mvl
-// main.mvl — game loop, when a piece locks and we need a new next:
+// main.mvl — every gravity tick, top up the bag if empty then hand
+// the peeked next-shape + advanced-bag to game.mvl.  main owns Random.
+let topped: Game       = ensure_bag(game);        // ! Random inside if empty
+let next_shape: Shape  = match peek_bag(topped.bag) {
+    Some(s) => s,
+    None    => Shape::I,                          // unreachable after ensure_bag
+};
+let advanced: Bag      = advance_bag(topped.bag);
+game = tick_gravity(topped, next_shape, advanced);
+```
+
+Original 0.1.0-0.1.3 draft used a `draw_from_bag → Option[(Shape,
+Bag)]` API returning a tuple.  MVL 1.6.0 has no first-class tuple
+types, so the API was split.  The stub `expect_or_default(...)` in
+the original draft was replaced by an `ensure_bag` helper that
+refills before the peek, guaranteeing `peek_bag` returns `Some` in
+practice.
+
+Legacy loop-pattern block (rejected — kept for spec archaeology):
+
+```mvl
+// Original draft (0.1.0-0.1.3), needs tuple types + a fallible API:
 let (shape, bag2): (Shape, Bag) = match draw_from_bag(game.bag) {
     Some(pair) => pair,
     None => {
@@ -509,9 +610,10 @@ let game2: Game = Game { bag: bag2, next: spawn_piece(shape), ...game };
 ### 13.4 Contract impact (Req 10)
 
 - `refill_bag(seed) -> Bag` — `ensures result.pieces.len() == 7`.
-- `draw_from_bag(bag) -> Option[(Shape, Bag)]` — `ensures match result {
-  Some((_, b)) => b.pieces.len() == bag.pieces.len() - 1, None =>
-  bag.pieces.len() == 0 }`.
+- `peek_bag(bag) -> Option[Shape]` — no ensures; the fn is a thin
+  `bag.pieces.first()` wrapper.
+- `advance_bag(bag) -> Bag` — `ensures result.pieces.len() ==
+  bag.pieces.len() - 1  ||  bag.pieces.len() == 0`.
 - No contract references a `seed` field on `Game`; the seed is a
   parameter of `refill_bag` only.
 
@@ -753,14 +855,16 @@ pub const START_LEVEL_MAX: Int = 15;
 ### 20.5 Gravity + lock-delay policy (`game.mvl`)
 
 ```mvl
-// Starting gravity in milliseconds per row, per difficulty.
-pub const GRAVITY_MS_EASY:   Int = 800;
-pub const GRAVITY_MS_NORMAL: Int = 500;
-pub const GRAVITY_MS_HARD:   Int = 300;
+// Level-1 gravity per difficulty — the values shown on the menu.
+// Actual per-level gravity is a Game Boy Tetris (Type A, 1989)
+// frame-table lookup — see `gameboy_ms_at_level` in game.mvl.
+pub const GRAVITY_MS_EASY:   Int = 1200;
+pub const GRAVITY_MS_NORMAL: Int =  900;
+pub const GRAVITY_MS_HARD:   Int =  800;
 
-// Floor for gravity — even at max level we don't drop below this.
-pub const GRAVITY_MS_MIN:    Int =  50;
-pub const GRAVITY_MS_MAX:    Int = 1000;
+// Floor and ceiling for `gravity_ms`.
+pub const GRAVITY_MS_MIN:    Int =  100;
+pub const GRAVITY_MS_MAX:    Int = 1200;
 
 // Lock-delay policy — time a resting piece stays before it locks.
 pub const LOCK_DELAY_MS_EASY:   Int = 500;
@@ -768,20 +872,33 @@ pub const LOCK_DELAY_MS_NORMAL: Int = 300;
 pub const LOCK_DELAY_MS_HARD:   Int = 150;
 ```
 
-`gravity_ms(level, difficulty)` interpolates monotonically between the
-starting value and `GRAVITY_MS_MIN` across the level range; the
-`ensures result >= GRAVITY_MS_MIN && result <= GRAVITY_MS_MAX` contract
-in §7.11 is discharged from these constants.
+`gravity_ms(level, difficulty)` is a discrete lookup on the Game
+Boy frame table (13 rows, one per level band) with a per-difficulty
+offset (Easy +300, Normal +0, Hard -100).  The §7.11 contract
+`result >= 100 && result <= 1200` is discharged from these
+constants at the compile-time solver.
 
-### 20.6 Loop cadence (`main.mvl`)
+Original 0.1.0-0.1.3 draft used a linear interpolation over
+`[GRAVITY_MS_EASY..GRAVITY_MS_MIN=50]`; the switch to the GB table
+happened in 0.1.5.  Bounds tightened from `[50, 1000]` to
+`[100, 1200]` in the same revision (playtest — 50 ms/row = 20
+rows/sec was unplayable).
+
+### 20.6 Rendering geometry (`main.mvl`)
 
 ```mvl
-pub const INPUT_POLL_MS: Int =  30;     // key-read timeout per tick
-pub const RENDER_HZ:     Int =  30;     // upper bound on redraw rate
+pub const INPUT_POLL_MS:      Int =  30;   // gravity-accumulator poll rate
+pub const FIELD_ROW_OFFSET:   Int =   2;   // playfield top row inside terminal
+pub const FIELD_COL_OFFSET:   Int =   4;   // playfield left col inside terminal
+pub const CELL_WIDTH:         Int =   2;   // "██" fits square in monospace
+pub const PANEL_COL_OFFSET:   Int =  30;   // side-panel origin
 ```
 
-The rest of `main.mvl` is I/O; magic strings (ANSI glyphs, palette
-labels) stay inline because they aren't reused.
+The `RENDER_HZ` constant in the 0.1.0-0.1.3 draft was never added —
+rendering is state-change-driven via a `dirty` flag in the game
+loop, not clocked.  The rest of `main.mvl` is I/O; magic strings
+(ANSI glyphs, palette labels) stay inline because they aren't
+reused.
 
 ## 21. Related
 

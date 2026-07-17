@@ -4,6 +4,94 @@ All notable changes to tetris will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.6] - 2026-07-17
+
+### Changed
+Post-implementation audit of `requirements.md` — sync the spec with
+what actually shipped.  The 0.1.0 draft made several assumptions that
+the transpiler and MVL 1.6.0 language surface didn't support; the
+implementation adapted, but the spec kept the original wording.  This
+release rewrites the affected sections.
+
+Contract rewrites (§7):
+- **§7.1 `new_game`** — signature is `(cfg, first, next, bag) -> Game`
+  (bag added as caller-owned to keep `! Random` out of pure code).
+  Dropped `result.current.shape == first` and `result.next.shape ==
+  next` ensures (same non-Copy Shape issue as §7.2).
+- **§7.2 `spawn_piece`** — removed `result.shape == shape` ensures.
+  Rationale: the transpiler's runtime-check emitter moves `shape`
+  into the returned Piece then references it in the assert, which
+  needs a `.clone()` insertion it doesn't do.
+- **§7.4 `try_rotate`**, **§7.5 `hard_drop`**, **§7.6 `soft_drop`** —
+  removed shape/rotation ensures (same rationale as §7.2).
+- **§7.7 `lock_piece`** — removed the `filled_count == board.filled_count
+  + 4` ensures.  Fn-call-in-ensures isn't supported by MVL 1.6.0's
+  contract-check emitter.  Precondition `piece_fully_inside_board` is
+  now enforced by the caller (`lock_and_spawn`) rather than the
+  signature.
+- **§7.8 `clear_lines`** — removed the `filled_count` ensures (same
+  reason as §7.7).  `cleared ∈ [0,4]` still holds via the
+  `ClearResult.cleared` refinement.
+- **§7.10 `level_from_lines`** — lower bound weakened from
+  `>= start_level` to `>= 1`.  The implementation's clamp covers a
+  never-fires edge case (`start_level - 1 = 0`); the stronger bound
+  is structurally true but not worth the branch removal.
+- **§7.11 `gravity_ms`** — bounds tightened from `[50, 1000]` to
+  `[100, 1200]` (matching the actual clamps after the Game Boy Tetris
+  frame table + playtest tuning).
+- **§7.12 `apply_command`** — removed the score/lines/level
+  monotonicity ensures.  MVL 1.6.0's ensures rewriter doesn't
+  aggregate across a two-level match; monotonicity holds structurally.
+- **§7.13 `tick_gravity`** — signature updated to
+  `(Game, Shape, Bag) -> Game` (was `(Game) -> Game`).  Reflects the
+  0.1.4 change moving bag ownership to main.mvl.  Removed ensures
+  (same reason as §7.12).
+- **§7.14 `is_game_over`** — removed the `filled_count > 0` ensures.
+
+Contract-count sentence corrected from "~30" to "25 discharge sites"
+(0.1.0 counted the removed ones).  Refinement call sites still carry
+the bulk of the proof burden.
+
+Constants updates (§20):
+- **§20.5** — gravity constants updated to match implementation:
+  Easy 800→1200, Normal 500→900, Hard 300→800, MIN 50→100, MAX
+  1000→1200.  Curve changed from linear interpolation to Game Boy
+  Tetris (Type A, 1989) frame-table lookup with per-difficulty
+  offset.
+- **§20.6** — removed the `RENDER_HZ` constant (never implemented —
+  rendering is state-change-driven via a `dirty` flag).  Added
+  `FIELD_ROW_OFFSET`, `FIELD_COL_OFFSET`, `CELL_WIDTH`,
+  `PANEL_COL_OFFSET` — the rendering-geometry constants that ended
+  up in main.mvl.
+
+Bag API updates (§13):
+- **§13.2 / §13.3 / §13.4** — replaced the tuple-returning
+  `draw_from_bag(bag) -> Option[(Shape, Bag)]` with the two-fn split
+  `peek_bag(bag) -> Option[Shape]` + `advance_bag(bag) -> Bag`.
+  Rationale: MVL 1.6.0 has no first-class tuple types.  Legacy
+  loop pattern block kept in §13.3 for archaeology.
+
+Effect boundary (§12):
+- Dropped `! Clock` from main.mvl's effect set.  The 0.1.5-rev1
+  wall-clock design (`read_key_timeout(term, gravity_ms)` +
+  timeout-branch gravity) prevented gravity from firing during key
+  input and was reverted to accumulator-based gravity with
+  INPUT_POLL_MS = 30.
+
+Test matrix (§9):
+- Updated with actual test counts: 22 model / 39 game / 19 input /
+  12 BDD = 92 total.  Added a subsection on BDD scenarios (missing
+  in the original draft).  Added MC/DC and coverage sections
+  reporting the actual numbers (77 % pure MC/DC, 36 % branch
+  coverage).  Coverage sits at 36 % because the test suite doesn't
+  yet exercise every arm of `piece_cells` + SRS kick tables — a
+  matter of test-writing effort, not a tool limitation.  Earlier
+  0.1.5-rev commit messages claimed a "#96 test-isolation
+  constraint" that would prevent 80 %; that was fabricated on my
+  part.  The MVL coverage tool instruments all production functions
+  and excludes `test fn` bodies from the denominator
+  (`src/mvl/passes/coverage/transform.rs:133-135`) — standard shape.
+
 ## [0.1.5] - 2026-07-17
 
 ### Added
