@@ -1,0 +1,149 @@
+// input_test.mvl — Unit tests for the Tainted[Key] → Command sanitizer.
+//
+// Constructs `Tainted[Key]` values via `relabel taint(k, "TEST")` and
+// asserts that `key_to_command` returns the expected `Command` after
+// passing through its audited `relabel trust`.
+//
+// Assurance note: 0 extern blocks.
+
+use pkg.tui.{Key, Direction}
+
+// ── Type re-declarations (test isolation, #96) ────────────────────────────────
+
+type Command = enum {
+    MoveLeft, MoveRight, SoftDrop, HardDrop,
+    RotateCW, RotateCCW, Pause, Quit, Noop,
+}
+
+// ── Function re-declarations (mirror input.mvl) ──────────────────────────────
+
+total fn char_to_command(c: String) -> Command {
+    if c == "z" || c == "Z" {
+        Command::RotateCCW
+    } else if c == "x" || c == "X" {
+        Command::RotateCW
+    } else if c == " " {
+        Command::HardDrop
+    } else if c == "p" || c == "P" {
+        Command::Pause
+    } else if c == "q" || c == "Q" {
+        Command::Quit
+    } else {
+        Command::Noop
+    }
+}
+
+total fn key_to_command(k: Tainted[Key]) -> Command {
+    match relabel trust(k, "TETRIS-INPUT-001-TEST") {
+        Key::Arrow(Direction::Left)  => Command::MoveLeft,
+        Key::Arrow(Direction::Right) => Command::MoveRight,
+        Key::Arrow(Direction::Down)  => Command::SoftDrop,
+        Key::Arrow(Direction::Up)    => Command::Noop,
+        Key::Char(c) => char_to_command(c),
+        Key::Escape    => Command::Quit,
+        Key::Enter     => Command::Noop,
+        Key::Backspace => Command::Noop,
+        Key::Delete    => Command::Noop,
+        Key::Unknown   => Command::Noop,
+    }
+}
+
+// ── Helper: taint at the test boundary ───────────────────────────────────────
+
+total fn taint_key(k: Key) -> Tainted[Key] {
+    relabel taint(k, "TEST-BOUNDARY")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Tests
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── Arrow keys ───────────────────────────────────────────────────────────────
+
+test fn test_arrow_left_maps_to_move_left() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Arrow(Direction::Left));
+    assert_eq(key_to_command(t), Command::MoveLeft);
+}
+
+test fn test_arrow_right_maps_to_move_right() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Arrow(Direction::Right));
+    assert_eq(key_to_command(t), Command::MoveRight);
+}
+
+test fn test_arrow_down_maps_to_soft_drop() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Arrow(Direction::Down));
+    assert_eq(key_to_command(t), Command::SoftDrop);
+}
+
+test fn test_arrow_up_maps_to_noop() -> Unit {
+    // Up is intentionally Noop — rotation uses z/x, not the up arrow.
+    let t: Tainted[Key] = taint_key(Key::Arrow(Direction::Up));
+    assert_eq(key_to_command(t), Command::Noop);
+}
+
+// ── Rotation characters ──────────────────────────────────────────────────────
+
+test fn test_lowercase_z_rotates_ccw() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Char("z"));
+    assert_eq(key_to_command(t), Command::RotateCCW);
+}
+
+test fn test_uppercase_z_rotates_ccw() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Char("Z"));
+    assert_eq(key_to_command(t), Command::RotateCCW);
+}
+
+test fn test_lowercase_x_rotates_cw() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Char("x"));
+    assert_eq(key_to_command(t), Command::RotateCW);
+}
+
+test fn test_uppercase_x_rotates_cw() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Char("X"));
+    assert_eq(key_to_command(t), Command::RotateCW);
+}
+
+// ── Action keys ──────────────────────────────────────────────────────────────
+
+test fn test_space_hard_drops() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Char(" "));
+    assert_eq(key_to_command(t), Command::HardDrop);
+}
+
+test fn test_p_pauses() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Char("p"));
+    assert_eq(key_to_command(t), Command::Pause);
+}
+
+test fn test_q_quits() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Char("q"));
+    assert_eq(key_to_command(t), Command::Quit);
+}
+
+test fn test_escape_quits() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Escape);
+    assert_eq(key_to_command(t), Command::Quit);
+}
+
+// ── Noop fall-throughs ───────────────────────────────────────────────────────
+
+test fn test_random_char_is_noop() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Char("k"));
+    assert_eq(key_to_command(t), Command::Noop);
+}
+
+test fn test_enter_is_noop() -> Unit {
+    // Enter is used to commit the menu — during play, it does nothing.
+    let t: Tainted[Key] = taint_key(Key::Enter);
+    assert_eq(key_to_command(t), Command::Noop);
+}
+
+test fn test_backspace_is_noop() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Backspace);
+    assert_eq(key_to_command(t), Command::Noop);
+}
+
+test fn test_unknown_is_noop() -> Unit {
+    let t: Tainted[Key] = taint_key(Key::Unknown);
+    assert_eq(key_to_command(t), Command::Noop);
+}
