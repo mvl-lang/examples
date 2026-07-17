@@ -57,21 +57,21 @@ pub const START_LEVEL_MAX: Int = 15;
 
 // ── Gravity + lock-delay constants (requirements.md §20.5) ────────────────────
 
-/// Starting gravity (ms per row) at level 1 on Easy difficulty.
+/// Level-1 gravity on each difficulty — the "starting speed" shown on
+/// the menu.  Actual per-level gravity comes from the Game Boy Tetris
+/// (Type A, 1989) frame table implemented in `gravity_ms`.  Values
+/// below are the level-1 (== Game Boy level 0) outputs of that table.
 pub const GRAVITY_MS_EASY: Int = 1200;
+pub const GRAVITY_MS_NORMAL: Int = 900;
+pub const GRAVITY_MS_HARD: Int = 800;
 
-/// Starting gravity at level 1 on Normal difficulty.
-pub const GRAVITY_MS_NORMAL: Int = 800;
+/// Floor for gravity — the fastest we ever go.  Level 20 on Hard.
+/// Chosen just above Game Boy level 29 (~83 ms) to leave the piece
+/// controllable in a terminal that isn't running at native GB rate.
+pub const GRAVITY_MS_MIN: Int = 100;
 
-/// Starting gravity at level 1 on Hard difficulty.
-pub const GRAVITY_MS_HARD: Int = 500;
-
-/// Floor for gravity — even at max level we don't drop below this
-/// (otherwise the piece is uncontrollable).
-pub const GRAVITY_MS_MIN: Int = 50;
-
-/// Ceiling for gravity — nothing exceeds this at any level.
-pub const GRAVITY_MS_MAX: Int = 1000;
+/// Ceiling for gravity — the slowest we ever go.  Level 1 on Easy.
+pub const GRAVITY_MS_MAX: Int = 1200;
 
 /// Lock delay on Easy difficulty.
 pub const LOCK_DELAY_MS_EASY: Int = 500;
@@ -689,25 +689,45 @@ pub total fn level_from_lines(lines: Int, start_level: Int) -> Int
     }
 }
 
-/// Gravity in ms/row for a given level and difficulty.  Linearly
-/// interpolated between the difficulty-specific starting value at
-/// level 1 and GRAVITY_MS_MIN at level 20.
+/// Game Boy Tetris (Type A, 1989) frame table converted to ms at
+/// 60 Hz.  MVL `level` in [1..20] maps to Game Boy `level - 1` in
+/// [0..19].  Values are `frames * 1000 / 60` rounded to the nearest
+/// 10 ms.
+total fn gameboy_ms_at_level(level: Int) -> Int {
+    if      level <= 1  { 900 }   // GB Level 0: 53 frames
+    else if level <= 2  { 820 }   // GB Level 1: 49 frames
+    else if level <= 3  { 750 }   //           2: 45
+    else if level <= 4  { 680 }   //           3: 41
+    else if level <= 5  { 620 }   //           4: 37
+    else if level <= 6  { 550 }   //           5: 33
+    else if level <= 7  { 470 }   //           6: 28
+    else if level <= 8  { 370 }   //           7: 22
+    else if level <= 9  { 280 }   //           8: 17
+    else if level <= 10 { 180 }   //           9: 11
+    else if level <= 13 { 170 }   //     10-12: 10
+    else if level <= 16 { 150 }   //     13-15: 9
+    else if level <= 19 { 130 }   //     16-18: 8
+    else                { 100 }   //     19-28: 6
+}
+
+/// Gravity in ms/row for a given level and difficulty.
+///
+/// Base curve tracks Game Boy Tetris (Type A) frame drops; difficulty
+/// shifts the whole curve up or down by a fixed offset:
+///   - Easy:   +300 ms (roughly one GB level slower)
+///   - Normal: exact GB frame table
+///   - Hard:   -100 ms, floored at GRAVITY_MS_MIN
 pub total fn gravity_ms(level: Int, difficulty: Difficulty) -> Int
     requires level >= 1 && level <= 20
-    ensures  result >= 50
-    ensures  result <= 1000
+    ensures  result >= 100
+    ensures  result <= 1200
 {
-    let starting: Int = match difficulty {
-        Difficulty::Easy   => GRAVITY_MS_EASY,
-        Difficulty::Normal => GRAVITY_MS_NORMAL,
-        Difficulty::Hard   => GRAVITY_MS_HARD,
+    let base: Int = gameboy_ms_at_level(level);
+    let raw: Int = match difficulty {
+        Difficulty::Easy   => base + 300,
+        Difficulty::Normal => base,
+        Difficulty::Hard   => if base > 200 { base - 100 } else { base },
     };
-    // Interpolate linearly from `starting` at level 1 down to
-    // GRAVITY_MS_MIN at level 20.  Uses integer division which is
-    // monotone non-decreasing in the step count.
-    let range: Int   = starting - GRAVITY_MS_MIN;
-    let step: Int    = range / 19;
-    let raw: Int     = starting - (level - 1) * step;
     if raw < GRAVITY_MS_MIN {
         GRAVITY_MS_MIN
     } else if raw > GRAVITY_MS_MAX {

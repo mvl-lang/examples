@@ -683,18 +683,36 @@ partial fn trusted_args() -> List[String] ! Env {
 
 // ── Gravity helpers ──────────────────────────────────────────────────────────
 
-/// gravity_ms mirroring game.mvl (repeated to keep main.mvl independent
-/// of game.mvl's implementation details).
+/// Game Boy Tetris (Type A) frame table converted to ms at 60 Hz —
+/// duplicated from game.mvl so main.mvl stays self-contained.  Kept
+/// in lockstep with `game.mvl::gameboy_ms_at_level`.
+total fn gameboy_ms_at(level: Int) -> Int {
+    if      level <= 1  { 900 }
+    else if level <= 2  { 820 }
+    else if level <= 3  { 750 }
+    else if level <= 4  { 680 }
+    else if level <= 5  { 620 }
+    else if level <= 6  { 550 }
+    else if level <= 7  { 470 }
+    else if level <= 8  { 370 }
+    else if level <= 9  { 280 }
+    else if level <= 10 { 180 }
+    else if level <= 13 { 170 }
+    else if level <= 16 { 150 }
+    else if level <= 19 { 130 }
+    else                { 100 }
+}
+
+/// Per-tick gravity for the current game state.  Mirrors
+/// `game.mvl::gravity_ms(level, difficulty)`.
 total fn gravity_for(game: Game) -> Int {
-    let starting: Int = match game.difficulty {
-        Difficulty::Easy   => 1200,
-        Difficulty::Normal => 800,
-        Difficulty::Hard   => 500,
+    let base: Int = gameboy_ms_at(game.level);
+    let raw: Int = match game.difficulty {
+        Difficulty::Easy   => base + 300,
+        Difficulty::Normal => base,
+        Difficulty::Hard   => if base > 200 { base - 100 } else { base },
     };
-    let range: Int = starting - 50;
-    let step: Int = range / 19;
-    let raw: Int = starting - (game.level - 1) * step;
-    if raw < 50 { 50 } else if raw > 1200 { 1200 } else { raw }
+    if raw < 100 { 100 } else if raw > 1200 { 1200 } else { raw }
 }
 
 // ── Game loop ────────────────────────────────────────────────────────────────
