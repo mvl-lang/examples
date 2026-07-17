@@ -133,11 +133,18 @@ pub type Offset = struct {
 ///
 /// Absolute cell positions are `piece.row + off.drow, piece.col + off.dcol`
 /// for each `off` in `piece_cells(shape, rotation)` (game.mvl).
+///
+/// The refinement bounds are wider than `Pos` to hold transient candidate
+/// positions inside `try_move` and `try_rotate` — an SRS kick can push
+/// (row, col) two units past the visible-buffer edge before the caller
+/// decides the candidate collides.  `Game`'s `with invariant` restricts
+/// its `current` and `next` fields to `row <= 22`, so the tight bound
+/// still applies at the game-state boundary.
 pub type Piece = struct {
     shape:    Shape,
     rotation: Rotation,
-    row:      Int where self >= -4 && self <= 22,
-    col:      Int where self >= -2 && self <= 11,
+    row:      Int where self >= -6 && self <= 25,
+    col:      Int where self >= -4 && self <= 13,
 }
 
 // ── Board ─────────────────────────────────────────────────────────────────────

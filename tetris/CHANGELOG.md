@@ -4,6 +4,17 @@ All notable changes to tetris will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.3] - 2026-07-17
+
+### Changed
+- §6 / §8 `Piece` refinements widened to `row ∈ [-6, 25]`,
+  `col ∈ [-4, 13]` — accommodates transient SRS candidate positions
+  inside `try_move` and `try_rotate`.  Reasoning: piece.row=22 + kick
+  drow=+2 + move dy=+1 → 25 (upper bound reached).  `Game.with
+  invariant` (§8) still restricts the game-state boundary to
+  `row <= 22`, so the tight bound applies wherever it matters.
+- models.mvl, models_test.mvl updated in lockstep.
+
 ## [0.1.2] - 2026-07-17
 
 ### Changed

@@ -30,8 +30,8 @@ type Offset = struct {
 type Piece = struct {
     shape:    Shape,
     rotation: Rotation,
-    row:      Int where self >= -4 && self <= 22,
-    col:      Int where self >= -2 && self <= 11,
+    row:      Int where self >= -6 && self <= 25,
+    col:      Int where self >= -4 && self <= 13,
 }
 
 type Bag = struct { pieces: List[Shape] }
@@ -111,22 +111,22 @@ test fn test_piece_min_bounds() -> Unit {
     let p: Piece = Piece {
         shape: Shape::I,
         rotation: Rotation::R0,
-        row: -4,
-        col: -2,
+        row: -6,
+        col: -4,
     };
-    assert_eq(p.row, -4);
-    assert_eq(p.col, -2);
+    assert_eq(p.row, -6);
+    assert_eq(p.col, -4);
 }
 
 test fn test_piece_max_bounds() -> Unit {
     let p: Piece = Piece {
         shape: Shape::I,
         rotation: Rotation::R270,
-        row: 22,
-        col: 11,
+        row: 25,
+        col: 13,
     };
-    assert_eq(p.row, 22);
-    assert_eq(p.col, 11);
+    assert_eq(p.row, 25);
+    assert_eq(p.col, 13);
 }
 
 // ── Shape: all 7 variants exhaustive (Req 3) ──────────────────────────────────

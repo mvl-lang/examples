@@ -1,0 +1,448 @@
+// game_test.mvl — Unit tests for pure game logic.
+//
+// Exercises SRS rotation, movement, line clearing, scoring, gravity,
+// and game-over without a terminal.  Every test uses local
+// re-declarations of the game.mvl fns because the per-file test
+// checker doesn't resolve cross-module `use` yet (#96 — same
+// convention as pong/game_test.mvl).
+//
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations ──────────────────────────────────────────────────────
+
+type Shape = enum { I, O, T, S, Z, L, J }
+type Rotation = enum { R0, R90, R180, R270 }
+type Cell = enum { Empty, Filled(Shape) }
+
+type Offset = struct {
+    drow: Int where self >= -2 && self <= 3,
+    dcol: Int where self >= -2 && self <= 3,
+}
+
+type Piece = struct {
+    shape:    Shape,
+    rotation: Rotation,
+    row:      Int where self >= -6 && self <= 25,
+    col:      Int where self >= -4 && self <= 13,
+}
+
+type Board = struct {
+    cells: List[List[Cell]],
+}
+
+type ClearResult = struct {
+    board:   Board,
+    cleared: Int where self >= 0 && self <= 4,
+}
+
+type Difficulty = enum { Easy, Normal, Hard }
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+total fn board_rows() -> Int { 20 }
+total fn board_cols() -> Int { 10 }
+
+// ── Board helpers (mirror game.mvl) ───────────────────────────────────────────
+
+total fn empty_row() -> List[Cell] {
+    List[Cell]::filled(10, Cell::Empty)
+}
+
+total fn empty_board() -> Board {
+    Board { cells: List[List[Cell]]::filled(20, empty_row()) }
+}
+
+total fn full_row_of(s: Shape) -> List[Cell] {
+    List[Cell]::filled(10, Cell::Filled(s))
+}
+
+total fn board_with_bottom_row_full(s: Shape) -> Board {
+    let empties: List[List[Cell]] = List[List[Cell]]::filled(19, empty_row());
+    Board { cells: empties.concat([full_row_of(s)]) }
+}
+
+/// Board with a single Filled cell at (row, col) and Empty elsewhere.
+total fn board_with_cell(row: Int, col: Int, s: Shape) -> Board {
+    set_cell_test(empty_board(), row, col, Cell::Filled(s))
+}
+
+total fn set_cell_test(board: Board, row: Int, col: Int, cell: Cell) -> Board {
+    if row < 0 || row >= 20 || col < 0 || col >= 10 {
+        board
+    } else {
+        let old_row: List[Cell] = match board.cells.get(row) {
+            None => empty_row(),
+            Some(r) => r,
+        };
+        let new_row: List[Cell] = old_row.slice(0, col)
+            .concat([cell])
+            .concat(old_row.slice(col + 1, 10));
+        let new_cells: List[List[Cell]] = board.cells.slice(0, row)
+            .concat([new_row])
+            .concat(board.cells.skip(row + 1));
+        Board { cells: new_cells }
+    }
+}
+
+// ── Piece geometry (mirror game.mvl, condensed subset) ────────────────────────
+//
+// Only re-declares piece_cells arms we actually test.  The full 28-arm
+// table lives in game.mvl.
+
+total fn t_r0_cells() -> List[Offset] {
+    [
+        Offset { drow: 0, dcol: 1 },
+        Offset { drow: 1, dcol: 0 },
+        Offset { drow: 1, dcol: 1 },
+        Offset { drow: 1, dcol: 2 },
+    ]
+}
+
+total fn i_r0_cells() -> List[Offset] {
+    [
+        Offset { drow: 1, dcol: 0 },
+        Offset { drow: 1, dcol: 1 },
+        Offset { drow: 1, dcol: 2 },
+        Offset { drow: 1, dcol: 3 },
+    ]
+}
+
+total fn o_cells_test() -> List[Offset] {
+    [
+        Offset { drow: 0, dcol: 0 },
+        Offset { drow: 0, dcol: 1 },
+        Offset { drow: 1, dcol: 0 },
+        Offset { drow: 1, dcol: 1 },
+    ]
+}
+
+// ── Collision helper (mirror piece_collides) ──────────────────────────────────
+
+total fn cell_collides_test(board: Board, row: Int, col: Int) -> Bool {
+    if col < 0 || col >= 10 || row >= 20 {
+        true
+    } else if row < 0 {
+        false
+    } else {
+        let c: Cell = match board.cells.get(row) {
+            None => Cell::Empty,
+            Some(r) => match r.get(col) {
+                None => Cell::Empty,
+                Some(x) => x,
+            },
+        };
+        match c {
+            Cell::Empty     => false,
+            Cell::Filled(_) => true,
+        }
+    }
+}
+
+total fn piece_collides_t_r0(piece: Piece, board: Board) -> Bool {
+    let cells: List[Offset] = t_r0_cells();
+    let pr: Int = piece.row;
+    let pc: Int = piece.col;
+    cells.any(|off: Offset| cell_collides_test(board, pr + off.drow, pc + off.dcol))
+}
+
+// ── Scoring helpers (mirror game.mvl) ─────────────────────────────────────────
+
+total fn score_for_clear_test(cleared: Int, level: Int) -> Int {
+    match cleared {
+        0 => 0,
+        1 => 100 * level,
+        2 => 300 * level,
+        3 => 500 * level,
+        4 => 800 * level,
+        _ => 0,
+    }
+}
+
+total fn level_from_lines_test(lines: Int, start_level: Int) -> Int {
+    let raw: Int = start_level + lines / 10;
+    if raw > 20 { 20 } else if raw < 1 { 1 } else { raw }
+}
+
+total fn gravity_ms_test(level: Int, difficulty: Difficulty) -> Int {
+    let starting: Int = match difficulty {
+        Difficulty::Easy   => 800,
+        Difficulty::Normal => 500,
+        Difficulty::Hard   => 300,
+    };
+    let range: Int = starting - 50;
+    let step: Int = range / 19;
+    let raw: Int = starting - (level - 1) * step;
+    if raw < 50 { 50 } else if raw > 1000 { 1000 } else { raw }
+}
+
+// ── Rotation helpers ──────────────────────────────────────────────────────────
+
+total fn rotate_cw_test(r: Rotation) -> Rotation {
+    match r {
+        Rotation::R0   => Rotation::R90,
+        Rotation::R90  => Rotation::R180,
+        Rotation::R180 => Rotation::R270,
+        Rotation::R270 => Rotation::R0,
+    }
+}
+
+// ── Filled-count helper ───────────────────────────────────────────────────────
+
+total fn filled_count_test(board: Board) -> Int {
+    board.cells.fold(0, |acc: Int, r: List[Cell]| {
+        acc + r.fold(0, |a: Int, c: Cell| match c {
+            Cell::Empty     => a,
+            Cell::Filled(_) => a + 1,
+        })
+    })
+}
+
+// ── row_is_full ──────────────────────────────────────────────────────────────
+
+total fn row_is_full_test(row: List[Cell]) -> Bool {
+    row.len() == 10 && row.all(|c: Cell| match c {
+        Cell::Empty     => false,
+        Cell::Filled(_) => true,
+    })
+}
+
+// ── clear_lines ──────────────────────────────────────────────────────────────
+
+total fn clear_lines_test(board: Board) -> ClearResult {
+    let survivors: List[List[Cell]] = board.cells
+        .filter(|r: List[Cell]| !row_is_full_test(r));
+    let cleared: Int = 20 - survivors.len();
+    let padding: List[List[Cell]] = List[List[Cell]]::filled(cleared, empty_row());
+    let new_cells: List[List[Cell]] = padding.concat(survivors);
+    let clamped: Int = if cleared < 0 { 0 } else if cleared > 4 { 4 } else { cleared };
+    ClearResult { board: Board { cells: new_cells }, cleared: clamped }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Tests
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── spawn geometry ───────────────────────────────────────────────────────────
+
+test fn test_spawn_row_and_col() -> Unit {
+    let p: Piece = Piece {
+        shape: Shape::T, rotation: Rotation::R0,
+        row: -1, col: 4,
+    };
+    assert_eq(p.row, -1);
+    assert_eq(p.col, 4);
+    assert_eq(p.rotation, Rotation::R0);
+}
+
+// ── piece_cells: bounded 4-cell tables ───────────────────────────────────────
+
+test fn test_t_r0_has_four_cells() -> Unit {
+    assert_eq(t_r0_cells().len(), 4);
+}
+
+test fn test_i_r0_has_four_cells() -> Unit {
+    assert_eq(i_r0_cells().len(), 4);
+}
+
+test fn test_o_has_four_cells() -> Unit {
+    assert_eq(o_cells_test().len(), 4);
+}
+
+test fn test_i_r0_spans_row_1() -> Unit {
+    // I-piece R0 has all 4 cells on drow=1 (SRS 4x4 bounding-box middle row).
+    let cells: List[Offset] = i_r0_cells();
+    let ok: Bool = cells.all(|o: Offset| o.drow == 1);
+    assert_eq(ok, true);
+}
+
+// ── rotation cycles ──────────────────────────────────────────────────────────
+
+test fn test_rotate_cw_cycles() -> Unit {
+    assert_eq(rotate_cw_test(Rotation::R0),   Rotation::R90);
+    assert_eq(rotate_cw_test(Rotation::R90),  Rotation::R180);
+    assert_eq(rotate_cw_test(Rotation::R180), Rotation::R270);
+    assert_eq(rotate_cw_test(Rotation::R270), Rotation::R0);
+}
+
+// ── board helpers ────────────────────────────────────────────────────────────
+
+test fn test_empty_board_is_empty() -> Unit {
+    let b: Board = empty_board();
+    assert_eq(filled_count_test(b), 0);
+    assert_eq(b.cells.len(), 20);
+}
+
+test fn test_set_cell_places_one_cell() -> Unit {
+    let b: Board = board_with_cell(19, 5, Shape::T);
+    assert_eq(filled_count_test(b), 1);
+}
+
+test fn test_set_cell_out_of_bounds_is_noop() -> Unit {
+    let b: Board = set_cell_test(empty_board(), -1, 5, Cell::Filled(Shape::T));
+    assert_eq(filled_count_test(b), 0);
+}
+
+// ── collision detection ──────────────────────────────────────────────────────
+
+test fn test_collision_left_wall_is_wall() -> Unit {
+    let b: Board = empty_board();
+    // Any cell at col -1 collides.
+    assert_eq(cell_collides_test(b, 10, -1), true);
+}
+
+test fn test_collision_right_wall_is_wall() -> Unit {
+    let b: Board = empty_board();
+    assert_eq(cell_collides_test(b, 10, 10), true);
+}
+
+test fn test_collision_floor_is_wall() -> Unit {
+    let b: Board = empty_board();
+    assert_eq(cell_collides_test(b, 20, 5), true);
+}
+
+test fn test_collision_above_board_is_free() -> Unit {
+    let b: Board = empty_board();
+    assert_eq(cell_collides_test(b, -1, 5), false);
+}
+
+test fn test_collision_filled_cell() -> Unit {
+    let b: Board = board_with_cell(19, 5, Shape::I);
+    assert_eq(cell_collides_test(b, 19, 5), true);
+}
+
+// ── piece collision (T at spawn row) ─────────────────────────────────────────
+
+test fn test_t_piece_at_spawn_no_collision() -> Unit {
+    // T at row=-1, col=4 in an empty board — cells at (-1,5), (0,4), (0,5), (0,6).
+    // Row -1 is free (above board), row 0 is empty.
+    let p: Piece = Piece { shape: Shape::T, rotation: Rotation::R0, row: -1, col: 4 };
+    assert_eq(piece_collides_t_r0(p, empty_board()), false);
+}
+
+test fn test_t_piece_collides_with_stack() -> Unit {
+    // Put a filled cell where the T's middle row would land.
+    let b: Board = board_with_cell(19, 5, Shape::I);
+    let p: Piece = Piece { shape: Shape::T, rotation: Rotation::R0, row: 18, col: 4 };
+    // T's cells at (18, 5), (19, 4), (19, 5), (19, 6). (19, 5) is filled.
+    assert_eq(piece_collides_t_r0(p, b), true);
+}
+
+// ── scoring ──────────────────────────────────────────────────────────────────
+
+test fn test_score_zero_clear_awards_zero() -> Unit {
+    assert_eq(score_for_clear_test(0, 5), 0);
+}
+
+test fn test_score_single_at_level_1() -> Unit {
+    assert_eq(score_for_clear_test(1, 1), 100);
+}
+
+test fn test_score_double_at_level_3() -> Unit {
+    assert_eq(score_for_clear_test(2, 3), 900);
+}
+
+test fn test_score_triple_at_level_5() -> Unit {
+    assert_eq(score_for_clear_test(3, 5), 2500);
+}
+
+test fn test_score_tetris_at_level_20_is_16000() -> Unit {
+    // requirements.md §7.9 — the actual upper bound.
+    assert_eq(score_for_clear_test(4, 20), 16000);
+}
+
+// ── level progression ───────────────────────────────────────────────────────
+
+test fn test_level_zero_lines_is_start() -> Unit {
+    assert_eq(level_from_lines_test(0, 1), 1);
+}
+
+test fn test_level_ten_lines_bumps_by_one() -> Unit {
+    assert_eq(level_from_lines_test(10, 1), 2);
+}
+
+test fn test_level_caps_at_twenty() -> Unit {
+    assert_eq(level_from_lines_test(200, 1), 20);
+}
+
+// ── gravity ─────────────────────────────────────────────────────────────────
+
+test fn test_gravity_level_1_easy_is_starting() -> Unit {
+    assert_eq(gravity_ms_test(1, Difficulty::Easy), 800);
+}
+
+test fn test_gravity_level_1_normal_is_starting() -> Unit {
+    assert_eq(gravity_ms_test(1, Difficulty::Normal), 500);
+}
+
+test fn test_gravity_level_1_hard_is_starting() -> Unit {
+    assert_eq(gravity_ms_test(1, Difficulty::Hard), 300);
+}
+
+test fn test_gravity_level_20_at_least_floor() -> Unit {
+    let g: Int = gravity_ms_test(20, Difficulty::Normal);
+    assert_eq(g >= 50, true);
+    assert_eq(g <= 1000, true);
+}
+
+test fn test_gravity_monotone_easy() -> Unit {
+    // Interpolation is monotone non-increasing in level.
+    let g1: Int  = gravity_ms_test(1,  Difficulty::Easy);
+    let g10: Int = gravity_ms_test(10, Difficulty::Easy);
+    let g20: Int = gravity_ms_test(20, Difficulty::Easy);
+    assert_eq(g1 >= g10, true);
+    assert_eq(g10 >= g20, true);
+}
+
+// ── row_is_full ──────────────────────────────────────────────────────────────
+
+test fn test_row_is_full_full() -> Unit {
+    assert_eq(row_is_full_test(full_row_of(Shape::I)), true);
+}
+
+test fn test_row_is_full_empty() -> Unit {
+    assert_eq(row_is_full_test(empty_row()), false);
+}
+
+test fn test_row_is_full_short() -> Unit {
+    // A row that isn't 10 wide is not "full" for our purposes.
+    assert_eq(row_is_full_test([Cell::Filled(Shape::I), Cell::Filled(Shape::I)]), false);
+}
+
+// ── clear_lines ──────────────────────────────────────────────────────────────
+
+test fn test_clear_lines_zero_on_empty() -> Unit {
+    let r: ClearResult = clear_lines_test(empty_board());
+    assert_eq(r.cleared, 0);
+}
+
+test fn test_clear_lines_single() -> Unit {
+    let b: Board = board_with_bottom_row_full(Shape::I);
+    let r: ClearResult = clear_lines_test(b);
+    assert_eq(r.cleared, 1);
+    // After clear, filled_count should be 0.
+    assert_eq(filled_count_test(r.board), 0);
+}
+
+test fn test_clear_lines_tetris() -> Unit {
+    // Four full rows at the bottom.
+    let empties: List[List[Cell]] = List[List[Cell]]::filled(16, empty_row());
+    let fulls: List[List[Cell]] = List[List[Cell]]::filled(4, full_row_of(Shape::I));
+    let b: Board = Board { cells: empties.concat(fulls) };
+    let r: ClearResult = clear_lines_test(b);
+    assert_eq(r.cleared, 4);
+    assert_eq(filled_count_test(r.board), 0);
+}
+
+test fn test_clear_lines_preserves_gaps_below() -> Unit {
+    // Row 18 has one filled cell (partial), row 19 is full.
+    // After clear, the partial row should still exist and slide down to row 19.
+    let b1: Board = board_with_cell(18, 3, Shape::L);
+    let empties: List[List[Cell]] = List[List[Cell]]::filled(19, empty_row())
+        .slice(0, 18)
+        .concat([b1.cells.get(18).unwrap_or(empty_row())]);
+    let b: Board = Board { cells: empties.concat([full_row_of(Shape::I)]) };
+    let r: ClearResult = clear_lines_test(b);
+    assert_eq(r.cleared, 1);
+    // Filled count should be 1 (the L cell that survived).
+    assert_eq(filled_count_test(r.board), 1);
+}

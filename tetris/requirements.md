@@ -4,7 +4,7 @@ Formal spec for `tetris` (in the `mvl-lang/examples` repo) — the classic
 falling-block puzzle, built to demonstrate all 11 MVL requirements with
 heavy prover load and full Super Rotation System (SRS) rotation logic.
 
-Version: 0.1.2 (draft, phase 1 landed) — see [CHANGELOG.md](CHANGELOG.md) for history.
+Version: 0.1.3 (draft, phase 1 landed) — see [CHANGELOG.md](CHANGELOG.md) for history.
 Last updated: 2026-07-17
 
 ---
@@ -129,8 +129,8 @@ wall-kicks can transiently produce out-of-board offsets.
 |---|---|---|
 | `Pos.row` | `Int where self >= -4 && self <= 22` | Spawn zone (-2..-1) + visible board (0..19) + kick overshoot buffer |
 | `Pos.col` | `Int where self >= -2 && self <= 11` | Wall-kick left/right overshoot buffer |
-| `Piece.row` | `Int where self >= -4 && self <= 22` | Same as `Pos.row` |
-| `Piece.col` | `Int where self >= -2 && self <= 11` | Same as `Pos.col` |
+| `Piece.row` | `Int where self >= -6 && self <= 25` | Wider than `Pos` — holds transient SRS candidate positions inside `try_move` / `try_rotate` |
+| `Piece.col` | `Int where self >= -4 && self <= 13` | Same rationale for horizontal SRS kicks |
 | `Game.score` | `Int where self >= 0 && self <= 999999` | Non-negative, capped at 999 999 (fits 6-digit HUD) |
 | `Game.level` | `Int where self >= 1 && self <= 20` | Classic 20-level cap |
 | `Game.lines_cleared` | `Int where self >= 0 && self <= 999` | Non-negative, capped for display |
@@ -294,8 +294,8 @@ pub type Pos = struct {
 pub type Piece = struct {
     shape:    Shape,
     rotation: Rotation,
-    row:      Int where self >= -4 && self <= 22,
-    col:      Int where self >= -2 && self <= 11,
+    row:      Int where self >= -6 && self <= 25,
+    col:      Int where self >= -4 && self <= 13,
 }
 
 pub type Game = struct {
