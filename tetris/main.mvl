@@ -192,21 +192,15 @@ partial fn draw_row(
     cells: List[Cell],
     p: Palette,
 ) -> Unit ! Terminal {
-    let i: ref Int = 0;
-    let n: Int = cells.len();
-    while i < n decreases n - i {
-        match cells.get(i) {
-            None => (),
-            Some(c) => match c {
-                Cell::Empty => {
-                    let _: Unit = erase_cell_at(term, row, i);
-                },
-                Cell::Filled(s) => {
-                    let _: Unit = draw_cell(term, row, i, s, p);
-                },
+    for entry in cells.enumerate() {
+        match entry.value {
+            Cell::Empty => {
+                let _: Unit = erase_cell_at(term, row, entry.index);
+            },
+            Cell::Filled(s) => {
+                let _: Unit = draw_cell(term, row, entry.index, s, p);
             },
         }
-        i = i + 1;
     }
 }
 
@@ -218,15 +212,8 @@ partial fn draw_board(
     board: Board,
     p: Palette,
 ) -> Unit ! Terminal {
-    let i: ref Int = 0;
-    while i < 20 decreases 20 - i {
-        match board.cells.get(i) {
-            None => (),
-            Some(r) => {
-                let _: Unit = draw_row(term, i, r, p);
-            },
-        }
-        i = i + 1;
+    for entry in board.cells.enumerate() {
+        let _: Unit = draw_row(term, entry.index, entry.value, p);
     }
 }
 
@@ -236,18 +223,9 @@ partial fn draw_piece(
     piece: Piece,
     p: Palette,
 ) -> Unit ! Terminal {
-    let cells: List[Offset] = piece_cells(piece.shape, piece.rotation);
-    let n: Int = cells.len();
-    let i: ref Int = 0;
-    while i < n decreases n - i {
-        match cells.get(i) {
-            None => (),
-            Some(off) => {
-                let _: Unit = draw_cell(term, piece.row + off.drow,
-                                        piece.col + off.dcol, piece.shape, p);
-            },
-        }
-        i = i + 1;
+    for off in piece_cells(piece.shape, piece.rotation) {
+        let _: Unit = draw_cell(term, piece.row + off.drow,
+                                piece.col + off.dcol, piece.shape, p);
     }
 }
 
@@ -289,18 +267,9 @@ partial fn draw_next_preview(
         clear_row = clear_row + 1;
     }
     // Draw the piece cells at (row + drow, col + dcol*2).
-    let cells: List[Offset] = piece_cells(s, Rotation::R0);
-    let n: Int = cells.len();
-    let i: ref Int = 0;
-    while i < n decreases n - i {
-        match cells.get(i) {
-            None => (),
-            Some(off) => {
-                let _: Unit = put(term, row + off.drow, col + off.dcol * CELL_WIDTH,
-                                  shape_glyph(s, p), shape_style(s, p));
-            },
-        }
-        i = i + 1;
+    for off in piece_cells(s, Rotation::R0) {
+        let _: Unit = put(term, row + off.drow, col + off.dcol * CELL_WIDTH,
+                          shape_glyph(s, p), shape_style(s, p));
     }
 }
 
@@ -704,17 +673,15 @@ total fn gameboy_ms_at(level: Int) -> Int {
 }
 
 /// Per-tick gravity for the current game state.  Mirrors
-/// `game.mvl::gravity_ms(level, difficulty)`.  Values are ~2x
-/// slower than the raw Game Boy table so gameplay in a terminal
-/// (where key events aren't sampled every frame) stays manageable.
+/// `game.mvl::gravity_ms(level, difficulty)`.
 total fn gravity_for(game: Game) -> Int {
     let base: Int = gameboy_ms_at(game.level);
     let raw: Int = match game.difficulty {
-        Difficulty::Easy   => base * 2 + 500,
-        Difficulty::Normal => base * 2,
-        Difficulty::Hard   => if base > 100 { base * 3 / 2 } else { base },
+        Difficulty::Easy   => base + 300,
+        Difficulty::Normal => base,
+        Difficulty::Hard   => if base > 200 { base - 100 } else { base },
     };
-    if raw < 200 { 200 } else if raw > 2500 { 2500 } else { raw }
+    if raw < 100 { 100 } else if raw > 1200 { 1200 } else { raw }
 }
 
 // ── Game loop ────────────────────────────────────────────────────────────────
@@ -759,24 +726,22 @@ total fn is_noop_command(cmd: Command) -> Bool {
 /// a `ref` sentinel — MVL rejects `let x: ref Enum = None;` binding
 /// against a temporary.
 ///
-/// Wall-clock discipline: gravity is tied to the read_key timeout,
-/// not to an iteration counter.  Each pass calls `read_key_timeout`
-/// with the current gravity_ms; if the read TIMES OUT (no key), a
-/// gravity tick fires — that means exactly `gravity_ms` wall-clock
-/// elapsed with no input.  If a key arrives, we process it and loop
-/// back for another full-gravity wait.  This avoids the accumulator
-/// over-counting bug where every iteration adds a fixed 30 ms
-/// regardless of how quickly a key returned.
+/// Gravity clock: each iteration reads a key with a short timeout
+/// (INPUT_POLL_MS) and adds that increment to an `elapsed` counter.
+/// When `elapsed >= gravity_ms`, gravity fires and the counter
+/// resets.  This model works both when the player is idle (increments
+/// come from timeouts, ~wall-clock accurate) and when the player is
+/// pressing keys rapidly (increments come from iterations, slight
+/// over-count — bounded because INPUT_POLL_MS is small).
 ///
-/// Rendering is gated on a `dirty` flag: only redrawn when the game
-/// state actually changed (a non-Noop command applied or gravity
-/// fired).  Without the flag, the loop would issue ~33 redraws per
-/// second — enough to flicker on most terminals.
+/// Rendering is gated on a `dirty` flag: only redrawn when state
+/// actually changed (a non-Noop command applied or gravity fired).
 partial fn game_loop(
     term: val Terminal,
     initial: Game,
 ) -> LoopOutcome ! Terminal + Random {
     let game: ref Game = initial;
+    let elapsed: ref Int = 0;
     let dirty: ref Bool = true;
     // Initial paint: clear the screen once, then let subsequent
     // renders overwrite cell-by-cell without a global clear.
@@ -794,30 +759,25 @@ partial fn game_loop(
             GameStatus::Paused   => false,
         };
         if over {
-            let _: Result[Option[Key], String] = read_key_timeout(term, 30000);
+            // Game-over splash: wait for any keypress, then exit.  Any
+            // read error (e.g. stdin closed) is treated the same as a
+            // keypress — we want to finish the loop either way.
+            let final_key: Result[Option[Key], String] = read_key_timeout(term, 30000);
+            let _: Option[Key] = match final_key {
+                Ok(o)  => o,
+                Err(_) => None,
+            };
             return LoopOutcome::Finished;
         }
 
-        // Wait up to `gravity_ms` for a key; on timeout, gravity fires.
-        let g: Int = gravity_for(game);
-        let kr: Result[Option[Key], String] = read_key_timeout(term, g);
+        // Wait up to INPUT_POLL_MS for a key.
+        let kr: Result[Option[Key], String] = read_key_timeout(term, INPUT_POLL_MS);
         let key_opt: Option[Key] = match kr {
             Ok(o)  => o,
             Err(_) => None,
         };
         match key_opt {
-            None => {
-                // ── Gravity tick ─────────────────────────────────────────
-                // Timeout means exactly `g` ms elapsed with no input.
-                let topped: Game = ensure_bag(game);
-                let next_shape: Shape = match peek_bag(topped.bag) {
-                    Some(s) => s,
-                    None    => Shape::I,
-                };
-                let advanced: Bag = advance_bag(topped.bag);
-                game = tick_gravity(topped, next_shape, advanced);
-                dirty = true;
-            },
+            None => (),
             Some(k) => {
                 // ── IFC trust boundary (requirements.md §16) ─────────────
                 // Every key from pkg-tui is treated as untrusted external
@@ -836,6 +796,22 @@ partial fn game_loop(
                     dirty = true;
                 }
             },
+        }
+
+        // Gravity clock — accumulate elapsed and fire when we cross
+        // gravity_ms.  Any tick that fires marks the frame dirty.
+        elapsed = elapsed + INPUT_POLL_MS;
+        let g: Int = gravity_for(game);
+        if elapsed >= g {
+            let topped: Game = ensure_bag(game);
+            let next_shape: Shape = match peek_bag(topped.bag) {
+                Some(s) => s,
+                None    => Shape::I,
+            };
+            let advanced: Bag = advance_bag(topped.bag);
+            game = tick_gravity(topped, next_shape, advanced);
+            elapsed = 0;
+            dirty = true;
         }
     }
     LoopOutcome::Finished

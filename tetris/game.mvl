@@ -57,12 +57,17 @@ pub const START_LEVEL_MAX: Int = 15;
 
 // ── Gravity + lock-delay constants (requirements.md §20.5) ────────────────────
 
-/// Level-1 gravity on each difficulty — the "starting speed" shown on
-/// the menu.  Actual per-level gravity comes from the Game Boy Tetris
-/// (Type A, 1989) frame table implemented in `gravity_ms`.  Values
-/// below are the level-1 (== Game Boy level 0) outputs of that table.
+/// Level-1 gravity on Easy — the "starting speed" shown on the menu.
+/// Actual per-level gravity comes from the Game Boy Tetris (Type A,
+/// 1989) frame table implemented in `gravity_ms`; this is the level-1
+/// (== GB level 0) output plus the Easy offset.
 pub const GRAVITY_MS_EASY: Int = 1200;
+
+/// Level-1 gravity on Normal — matches Game Boy level 0 exactly
+/// (53 frames @ 60 Hz ≈ 883 ms, rounded to 900 ms).
 pub const GRAVITY_MS_NORMAL: Int = 900;
+
+/// Level-1 gravity on Hard — Game Boy level 0 minus the Hard offset.
 pub const GRAVITY_MS_HARD: Int = 800;
 
 /// Floor for gravity — the fastest we ever go.  Level 20 on Hard.

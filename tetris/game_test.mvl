@@ -297,6 +297,21 @@ test fn test_set_cell_out_of_bounds_is_noop() -> Unit {
     assert_eq(filled_count_test(b), 0);
 }
 
+test fn test_set_cell_row_too_high_is_noop() -> Unit {
+    let b: Board = set_cell_test(empty_board(), 20, 5, Cell::Filled(Shape::T));
+    assert_eq(filled_count_test(b), 0);
+}
+
+test fn test_set_cell_col_negative_is_noop() -> Unit {
+    let b: Board = set_cell_test(empty_board(), 5, -1, Cell::Filled(Shape::T));
+    assert_eq(filled_count_test(b), 0);
+}
+
+test fn test_set_cell_col_too_high_is_noop() -> Unit {
+    let b: Board = set_cell_test(empty_board(), 5, 10, Cell::Filled(Shape::T));
+    assert_eq(filled_count_test(b), 0);
+}
+
 // ── collision detection ──────────────────────────────────────────────────────
 
 test fn test_collision_left_wall_is_wall() -> Unit {

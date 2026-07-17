@@ -133,8 +133,18 @@ test fn test_p_pauses() -> Unit {
     assert_eq(key_to_command(t), Command::Pause);
 }
 
+test fn test_uppercase_p_pauses() -> Unit {
+    let t: Key = taint_key(Key::Char("P"));
+    assert_eq(key_to_command(t), Command::Pause);
+}
+
 test fn test_q_quits() -> Unit {
     let t: Key = taint_key(Key::Char("q"));
+    assert_eq(key_to_command(t), Command::Quit);
+}
+
+test fn test_uppercase_q_quits() -> Unit {
+    let t: Key = taint_key(Key::Char("Q"));
     assert_eq(key_to_command(t), Command::Quit);
 }
 
@@ -158,6 +168,11 @@ test fn test_enter_is_noop() -> Unit {
 
 test fn test_backspace_is_noop() -> Unit {
     let t: Key = taint_key(Key::Backspace);
+    assert_eq(key_to_command(t), Command::Noop);
+}
+
+test fn test_delete_is_noop() -> Unit {
+    let t: Key = taint_key(Key::Delete);
     assert_eq(key_to_command(t), Command::Noop);
 }
 
