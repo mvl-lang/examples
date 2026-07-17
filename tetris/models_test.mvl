@@ -1,0 +1,315 @@
+// models_test.mvl — Unit tests for domain type construction.
+//
+// Verifies that every refinement and struct invariant declared in
+// models.mvl accepts the values game.mvl and main.mvl will use.  The
+// prover discharges these at compile time; the tests double as
+// executable examples.
+//
+// Type declarations are re-stated locally because the per-file test
+// checker doesn't resolve `use models::...` yet (#96 — same convention
+// as pong/models_test.mvl and snake_game/game_test.mvl).
+//
+// Assurance note: 0 extern blocks.
+
+// ── Type re-declarations ──────────────────────────────────────────────────────
+
+type Shape = enum { I, O, T, S, Z, L, J }
+type Rotation = enum { R0, R90, R180, R270 }
+type Cell = enum { Empty, Filled(Shape) }
+
+type Pos = struct {
+    row: Int where self >= -4 && self <= 22,
+    col: Int where self >= -2 && self <= 11,
+}
+
+type Offset = struct {
+    drow: Int where self >= -2 && self <= 3,
+    dcol: Int where self >= -2 && self <= 3,
+}
+
+type Piece = struct {
+    shape:    Shape,
+    rotation: Rotation,
+    row:      Int where self >= -6 && self <= 25,
+    col:      Int where self >= -4 && self <= 13,
+}
+
+type Bag = struct { pieces: List[Shape] }
+type GameStatus = enum { Playing, Paused, GameOver }
+type Command = enum {
+    MoveLeft, MoveRight, SoftDrop, HardDrop,
+    RotateCW, RotateCCW, Pause, Quit, Noop,
+}
+type Palette = enum { BlackWhite, Color }
+type Difficulty = enum { Easy, Normal, Hard }
+
+type Config = struct {
+    palette:     Palette,
+    difficulty:  Difficulty,
+    start_level: Int where self >= 1 && self <= 15,
+}
+
+type Board = struct { cells: List[List[Cell]] }
+
+type ClearResult = struct {
+    board:   Board,
+    cleared: Int where self >= 0 && self <= 4,
+}
+
+// ── Pos: boundary construction ────────────────────────────────────────────────
+
+test fn test_pos_min_bounds() -> Unit {
+    let p: Pos = Pos { row: -4, col: -2 };
+    assert_eq(p.row, -4);
+    assert_eq(p.col, -2);
+}
+
+test fn test_pos_max_bounds() -> Unit {
+    let p: Pos = Pos { row: 22, col: 11 };
+    assert_eq(p.row, 22);
+    assert_eq(p.col, 11);
+}
+
+test fn test_pos_typical() -> Unit {
+    let p: Pos = Pos { row: 10, col: 4 };
+    assert_eq(p.row, 10);
+    assert_eq(p.col, 4);
+}
+
+// ── Offset: piece-cell range and SRS-kick range ───────────────────────────────
+
+test fn test_offset_piece_cell_range() -> Unit {
+    // Every piece_cells entry has drow, dcol in [0..3].
+    let o: Offset = Offset { drow: 3, dcol: 3 };
+    assert_eq(o.drow, 3);
+    assert_eq(o.dcol, 3);
+}
+
+test fn test_offset_srs_kick_range() -> Unit {
+    // SRS kick offsets can be ±2 in either axis.
+    let o: Offset = Offset { drow: -2, dcol: -2 };
+    assert_eq(o.drow, -2);
+    assert_eq(o.dcol, -2);
+}
+
+// ── Piece: spawn and boundary construction ────────────────────────────────────
+
+test fn test_piece_at_spawn() -> Unit {
+    // SPAWN_ROW = -1, SPAWN_COL = 4 (models.mvl).
+    let p: Piece = Piece {
+        shape: Shape::T,
+        rotation: Rotation::R0,
+        row: -1,
+        col: 4,
+    };
+    assert_eq(p.row, -1);
+    assert_eq(p.col, 4);
+}
+
+test fn test_piece_min_bounds() -> Unit {
+    let p: Piece = Piece {
+        shape: Shape::I,
+        rotation: Rotation::R0,
+        row: -6,
+        col: -4,
+    };
+    assert_eq(p.row, -6);
+    assert_eq(p.col, -4);
+}
+
+test fn test_piece_max_bounds() -> Unit {
+    let p: Piece = Piece {
+        shape: Shape::I,
+        rotation: Rotation::R270,
+        row: 25,
+        col: 13,
+    };
+    assert_eq(p.row, 25);
+    assert_eq(p.col, 13);
+}
+
+// ── Shape: all 7 variants exhaustive (Req 3) ──────────────────────────────────
+
+total fn shape_name(s: Shape) -> String {
+    match s {
+        Shape::I => "I",
+        Shape::O => "O",
+        Shape::T => "T",
+        Shape::S => "S",
+        Shape::Z => "Z",
+        Shape::L => "L",
+        Shape::J => "J",
+    }
+}
+
+test fn test_shape_all_seven() -> Unit {
+    assert_eq(shape_name(Shape::I), "I");
+    assert_eq(shape_name(Shape::O), "O");
+    assert_eq(shape_name(Shape::T), "T");
+    assert_eq(shape_name(Shape::S), "S");
+    assert_eq(shape_name(Shape::Z), "Z");
+    assert_eq(shape_name(Shape::L), "L");
+    assert_eq(shape_name(Shape::J), "J");
+}
+
+// ── Rotation: all 4 variants exhaustive ───────────────────────────────────────
+
+total fn rotation_degrees(r: Rotation) -> Int {
+    match r {
+        Rotation::R0   => 0,
+        Rotation::R90  => 90,
+        Rotation::R180 => 180,
+        Rotation::R270 => 270,
+    }
+}
+
+test fn test_rotation_all_four() -> Unit {
+    assert_eq(rotation_degrees(Rotation::R0),   0);
+    assert_eq(rotation_degrees(Rotation::R90),  90);
+    assert_eq(rotation_degrees(Rotation::R180), 180);
+    assert_eq(rotation_degrees(Rotation::R270), 270);
+}
+
+// ── Cell: Empty and Filled variants ───────────────────────────────────────────
+
+total fn cell_shape_name(c: Cell) -> String {
+    match c {
+        Cell::Empty       => "empty",
+        Cell::Filled(s)   => shape_name(s),
+    }
+}
+
+test fn test_cell_empty() -> Unit {
+    assert_eq(cell_shape_name(Cell::Empty), "empty");
+}
+
+test fn test_cell_filled_each_shape() -> Unit {
+    assert_eq(cell_shape_name(Cell::Filled(Shape::I)), "I");
+    assert_eq(cell_shape_name(Cell::Filled(Shape::O)), "O");
+    assert_eq(cell_shape_name(Cell::Filled(Shape::L)), "L");
+}
+
+// ── GameStatus: all 3 variants ────────────────────────────────────────────────
+
+total fn status_name(s: GameStatus) -> String {
+    match s {
+        GameStatus::Playing  => "playing",
+        GameStatus::Paused   => "paused",
+        GameStatus::GameOver => "game_over",
+    }
+}
+
+test fn test_status_all_three() -> Unit {
+    assert_eq(status_name(GameStatus::Playing),  "playing");
+    assert_eq(status_name(GameStatus::Paused),   "paused");
+    assert_eq(status_name(GameStatus::GameOver), "game_over");
+}
+
+// ── Command: all 9 variants exhaustive ────────────────────────────────────────
+
+total fn command_name(c: Command) -> String {
+    match c {
+        Command::MoveLeft  => "left",
+        Command::MoveRight => "right",
+        Command::SoftDrop  => "soft",
+        Command::HardDrop  => "hard",
+        Command::RotateCW  => "cw",
+        Command::RotateCCW => "ccw",
+        Command::Pause     => "pause",
+        Command::Quit      => "quit",
+        Command::Noop      => "noop",
+    }
+}
+
+test fn test_command_all_nine() -> Unit {
+    assert_eq(command_name(Command::MoveLeft),  "left");
+    assert_eq(command_name(Command::MoveRight), "right");
+    assert_eq(command_name(Command::SoftDrop),  "soft");
+    assert_eq(command_name(Command::HardDrop),  "hard");
+    assert_eq(command_name(Command::RotateCW),  "cw");
+    assert_eq(command_name(Command::RotateCCW), "ccw");
+    assert_eq(command_name(Command::Pause),     "pause");
+    assert_eq(command_name(Command::Quit),      "quit");
+    assert_eq(command_name(Command::Noop),      "noop");
+}
+
+// ── Palette + Difficulty ──────────────────────────────────────────────────────
+
+total fn palette_name(p: Palette) -> String {
+    match p {
+        Palette::BlackWhite => "bw",
+        Palette::Color      => "color",
+    }
+}
+
+test fn test_palette_exhaustive() -> Unit {
+    assert_eq(palette_name(Palette::BlackWhite), "bw");
+    assert_eq(palette_name(Palette::Color),      "color");
+}
+
+total fn difficulty_name(d: Difficulty) -> String {
+    match d {
+        Difficulty::Easy   => "easy",
+        Difficulty::Normal => "normal",
+        Difficulty::Hard   => "hard",
+    }
+}
+
+test fn test_difficulty_exhaustive() -> Unit {
+    assert_eq(difficulty_name(Difficulty::Easy),   "easy");
+    assert_eq(difficulty_name(Difficulty::Normal), "normal");
+    assert_eq(difficulty_name(Difficulty::Hard),   "hard");
+}
+
+// ── Config: start_level bounds ────────────────────────────────────────────────
+
+test fn test_config_start_level_min() -> Unit {
+    let c: Config = Config {
+        palette:     Palette::Color,
+        difficulty:  Difficulty::Normal,
+        start_level: 1,
+    };
+    assert_eq(c.start_level, 1);
+}
+
+test fn test_config_start_level_max() -> Unit {
+    let c: Config = Config {
+        palette:     Palette::Color,
+        difficulty:  Difficulty::Hard,
+        start_level: 15,
+    };
+    assert_eq(c.start_level, 15);
+}
+
+// ── ClearResult: cleared bounds ───────────────────────────────────────────────
+
+test fn test_clear_result_zero() -> Unit {
+    let r: ClearResult = ClearResult {
+        board:   Board { cells: [] },
+        cleared: 0,
+    };
+    assert_eq(r.cleared, 0);
+}
+
+test fn test_clear_result_tetris() -> Unit {
+    let r: ClearResult = ClearResult {
+        board:   Board { cells: [] },
+        cleared: 4,
+    };
+    assert_eq(r.cleared, 4);
+}
+
+// ── Bag: empty and full-bag construction ──────────────────────────────────────
+
+test fn test_bag_empty() -> Unit {
+    let b: Bag = Bag { pieces: [] };
+    assert_eq(b.pieces.len(), 0);
+}
+
+test fn test_bag_full_seven() -> Unit {
+    let b: Bag = Bag {
+        pieces: [Shape::I, Shape::O, Shape::T, Shape::S,
+                 Shape::Z, Shape::L, Shape::J],
+    };
+    assert_eq(b.pieces.len(), 7);
+}

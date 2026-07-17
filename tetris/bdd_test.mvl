@@ -1,0 +1,562 @@
+// bdd_test.mvl — BDD-style scenarios for the pure game logic.
+//
+// Follows the MVL BDD naming convention (ADR-0020, spec 004 Req 5):
+//
+//   given_*          — set up preconditions, return TetrisCtx
+//   when_*           — pure transform on ctx, return updated TetrisCtx
+//   then_*           — assert on ctx, return Unit
+//   test fn scenario_* — chains the steps; entry point
+//
+// State is threaded explicitly through `TetrisCtx` — consistent with
+// MVL's ownership model.  This file exercises the same pure logic as
+// `game_test.mvl` but in a scenario-first shape that reads as
+// executable spec.
+//
+// Assurance note: 0 extern blocks.
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Type re-declarations (mirror models.mvl, per #96)
+// ═════════════════════════════════════════════════════════════════════════════
+
+type Shape = enum { I, O, T, S, Z, L, J }
+type Rotation = enum { R0, R90, R180, R270 }
+type Cell = enum { Empty, Filled(Shape) }
+
+type Offset = struct {
+    drow: Int where self >= -2 && self <= 3,
+    dcol: Int where self >= -2 && self <= 3,
+}
+
+type Piece = struct {
+    shape:    Shape,
+    rotation: Rotation,
+    row:      Int where self >= -6 && self <= 25,
+    col:      Int where self >= -4 && self <= 13,
+}
+
+type Board = struct { cells: List[List[Cell]] }
+type Difficulty = enum { Easy, Normal, Hard }
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Domain functions under test (mirror game.mvl subset)
+// ═════════════════════════════════════════════════════════════════════════════
+
+total fn empty_row() -> List[Cell] {
+    List[Cell]::filled(10, Cell::Empty)
+}
+
+total fn empty_board() -> Board {
+    Board { cells: List[List[Cell]]::filled(20, empty_row()) }
+}
+
+total fn full_row_of(s: Shape) -> List[Cell] {
+    List[Cell]::filled(10, Cell::Filled(s))
+}
+
+total fn set_cell_impl(board: Board, row: Int, col: Int, cell: Cell) -> Board {
+    if row < 0 || row >= 20 || col < 0 || col >= 10 {
+        board
+    } else {
+        let old_row: List[Cell] = match board.cells.get(row) {
+            None => empty_row(),
+            Some(r) => r,
+        };
+        let new_row: List[Cell] = old_row.slice(0, col)
+            .concat([cell])
+            .concat(old_row.slice(col + 1, 10));
+        let new_cells: List[List[Cell]] = board.cells.slice(0, row)
+            .concat([new_row])
+            .concat(board.cells.skip(row + 1));
+        Board { cells: new_cells }
+    }
+}
+
+// T-piece geometry in every rotation (used for movement scenarios).
+total fn t_cells(rotation: Rotation) -> List[Offset] {
+    match rotation {
+        Rotation::R0 => [
+            Offset { drow: 0, dcol: 1 },
+            Offset { drow: 1, dcol: 0 },
+            Offset { drow: 1, dcol: 1 },
+            Offset { drow: 1, dcol: 2 },
+        ],
+        Rotation::R90 => [
+            Offset { drow: 0, dcol: 1 },
+            Offset { drow: 1, dcol: 1 },
+            Offset { drow: 1, dcol: 2 },
+            Offset { drow: 2, dcol: 1 },
+        ],
+        Rotation::R180 => [
+            Offset { drow: 1, dcol: 0 },
+            Offset { drow: 1, dcol: 1 },
+            Offset { drow: 1, dcol: 2 },
+            Offset { drow: 2, dcol: 1 },
+        ],
+        Rotation::R270 => [
+            Offset { drow: 0, dcol: 1 },
+            Offset { drow: 1, dcol: 0 },
+            Offset { drow: 1, dcol: 1 },
+            Offset { drow: 2, dcol: 1 },
+        ],
+    }
+}
+
+total fn cell_collides(board: Board, row: Int, col: Int) -> Bool {
+    if col < 0 || col >= 10 || row >= 20 {
+        true
+    } else if row < 0 {
+        false
+    } else {
+        let c: Cell = match board.cells.get(row) {
+            None => Cell::Empty,
+            Some(r) => match r.get(col) {
+                None => Cell::Empty,
+                Some(x) => x,
+            },
+        };
+        match c {
+            Cell::Empty     => false,
+            Cell::Filled(_) => true,
+        }
+    }
+}
+
+/// T-piece specialised collision — enough for the BDD scenarios below.
+total fn t_collides(piece: Piece, board: Board) -> Bool {
+    let cells: List[Offset] = t_cells(piece.rotation);
+    let pr: Int = piece.row;
+    let pc: Int = piece.col;
+    cells.any(|off: Offset| cell_collides(board, pr + off.drow, pc + off.dcol))
+}
+
+/// Try to translate a T-piece by (dx, dy).
+total fn t_try_move(piece: Piece, board: Board, dx: Int, dy: Int) -> Option[Piece]
+    requires dx >= -1 && dx <= 1
+    requires dy >= 0 && dy <= 1
+{
+    let new_row: Int = piece.row + dy;
+    let new_col: Int = piece.col + dx;
+    if new_row < -6 || new_row > 25 || new_col < -4 || new_col > 13 {
+        None
+    } else {
+        let cand: Piece = Piece {
+            shape:    Shape::T,
+            rotation: piece.rotation,
+            row:      new_row,
+            col:      new_col,
+        };
+        if t_collides(cand, board) { None } else { Some(cand) }
+    }
+}
+
+/// Row-is-full check.
+total fn row_is_full(row: List[Cell]) -> Bool {
+    row.len() == 10 && row.all(|c: Cell| match c {
+        Cell::Empty     => false,
+        Cell::Filled(_) => true,
+    })
+}
+
+/// Number of full rows in `board`.
+total fn count_full_rows(board: Board) -> Int {
+    board.cells.fold(0, |acc: Int, r: List[Cell]|
+        if row_is_full(r) { acc + 1 } else { acc })
+}
+
+/// score_for_clear mirror.
+total fn score_for_clear(cleared: Int, level: Int) -> Int {
+    match cleared {
+        0 => 0,
+        1 => 100 * level,
+        2 => 300 * level,
+        3 => 500 * level,
+        4 => 800 * level,
+        _ => 0,
+    }
+}
+
+/// level_from_lines mirror.
+total fn level_from_lines(lines: Int, start_level: Int) -> Int {
+    let raw: Int = start_level + lines / 10;
+    if raw > 20 { 20 } else if raw < 1 { 1 } else { raw }
+}
+
+/// Game Boy Tetris (Type A) frame table converted to ms at 60 Hz —
+/// mirror of `game.mvl::gameboy_ms_at_level`.
+total fn gameboy_ms_at_level(level: Int) -> Int {
+    if      level <= 1  { 900 }
+    else if level <= 2  { 820 }
+    else if level <= 3  { 750 }
+    else if level <= 4  { 680 }
+    else if level <= 5  { 620 }
+    else if level <= 6  { 550 }
+    else if level <= 7  { 470 }
+    else if level <= 8  { 370 }
+    else if level <= 9  { 280 }
+    else if level <= 10 { 180 }
+    else if level <= 13 { 170 }
+    else if level <= 16 { 150 }
+    else if level <= 19 { 130 }
+    else                { 100 }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  BDD context
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Scenario state.  Fields are populated only by the steps that need
+/// them; each scenario picks the subset it cares about.
+type TetrisCtx = struct {
+    board:      Board,
+    piece:      Piece,
+    piece_opt:  Option[Piece],  // result of try_move
+    level:      Int,
+    lines:      Int,
+    score:      Int,
+    cleared:    Int,
+    gravity_ms: Int,
+    difficulty: Difficulty,
+    ok:         Bool,
+}
+
+total fn empty_ctx() -> TetrisCtx {
+    TetrisCtx {
+        board:      empty_board(),
+        piece:      Piece {
+            shape: Shape::T, rotation: Rotation::R0,
+            row: -1, col: 4,
+        },
+        piece_opt:  None,
+        level:      1,
+        lines:      0,
+        score:      0,
+        cleared:    0,
+        gravity_ms: 0,
+        difficulty: Difficulty::Normal,
+        ok:         true,
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Given — set up preconditions
+// ═════════════════════════════════════════════════════════════════════════════
+
+fn given_t_piece_at(row: Int, col: Int) -> TetrisCtx {
+    let ctx: TetrisCtx = empty_ctx();
+    TetrisCtx {
+        board: ctx.board,
+        piece: Piece {
+            shape: Shape::T, rotation: Rotation::R0,
+            row: row, col: col,
+        },
+        piece_opt: ctx.piece_opt,
+        level: ctx.level, lines: ctx.lines, score: ctx.score,
+        cleared: ctx.cleared, gravity_ms: ctx.gravity_ms,
+        difficulty: ctx.difficulty, ok: ctx.ok,
+    }
+}
+
+fn given_t_piece_at_left_wall() -> TetrisCtx {
+    // T at col 0: cells at (row, 1), (row+1, 0), (row+1, 1), (row+1, 2).
+    // Cannot move left — cell at col -1 would collide with left wall.
+    given_t_piece_at(5, 0)
+}
+
+fn given_t_piece_at_right_wall() -> TetrisCtx {
+    // T at col 7: cells span col 7..9.  Cannot move right.
+    given_t_piece_at(5, 7)
+}
+
+fn given_board_with_bottom_row_almost_full() -> TetrisCtx {
+    // Bottom row filled at cols 0..8 (9 cells).  Col 9 is empty —
+    // a piece dropping into it completes the row.
+    let ctx: TetrisCtx = empty_ctx();
+    let full: List[Cell] = [
+        Cell::Filled(Shape::I), Cell::Filled(Shape::I), Cell::Filled(Shape::I),
+        Cell::Filled(Shape::I), Cell::Filled(Shape::I), Cell::Filled(Shape::I),
+        Cell::Filled(Shape::I), Cell::Filled(Shape::I), Cell::Filled(Shape::I),
+        Cell::Empty,
+    ];
+    let cells: List[List[Cell]] = List[List[Cell]]::filled(19, empty_row())
+        .concat([full]);
+    TetrisCtx {
+        board: Board { cells: cells },
+        piece: ctx.piece,
+        piece_opt: ctx.piece_opt,
+        level: ctx.level, lines: ctx.lines, score: ctx.score,
+        cleared: ctx.cleared, gravity_ms: ctx.gravity_ms,
+        difficulty: ctx.difficulty, ok: ctx.ok,
+    }
+}
+
+fn given_board_with_four_almost_full_rows() -> TetrisCtx {
+    // Rows 16..19 filled at cols 0..8, col 9 empty.
+    // An I-piece dropping vertically into col 9 clears all 4 rows (Tetris).
+    let ctx: TetrisCtx = empty_ctx();
+    let full: List[Cell] = [
+        Cell::Filled(Shape::J), Cell::Filled(Shape::J), Cell::Filled(Shape::J),
+        Cell::Filled(Shape::J), Cell::Filled(Shape::J), Cell::Filled(Shape::J),
+        Cell::Filled(Shape::J), Cell::Filled(Shape::J), Cell::Filled(Shape::J),
+        Cell::Empty,
+    ];
+    let cells: List[List[Cell]] = List[List[Cell]]::filled(16, empty_row())
+        .concat([full]).concat([full]).concat([full]).concat([full]);
+    TetrisCtx {
+        board: Board { cells: cells },
+        piece: ctx.piece,
+        piece_opt: ctx.piece_opt,
+        level: ctx.level, lines: ctx.lines, score: ctx.score,
+        cleared: ctx.cleared, gravity_ms: ctx.gravity_ms,
+        difficulty: ctx.difficulty, ok: ctx.ok,
+    }
+}
+
+fn given_game_at_level(level: Int, lines: Int) -> TetrisCtx {
+    let ctx: TetrisCtx = empty_ctx();
+    TetrisCtx {
+        board: ctx.board, piece: ctx.piece, piece_opt: ctx.piece_opt,
+        level: level,
+        lines: lines,
+        score: ctx.score, cleared: ctx.cleared,
+        gravity_ms: ctx.gravity_ms, difficulty: ctx.difficulty, ok: ctx.ok,
+    }
+}
+
+fn given_difficulty(diff: Difficulty) -> TetrisCtx {
+    let ctx: TetrisCtx = empty_ctx();
+    TetrisCtx {
+        board: ctx.board, piece: ctx.piece, piece_opt: ctx.piece_opt,
+        level: ctx.level, lines: ctx.lines, score: ctx.score,
+        cleared: ctx.cleared, gravity_ms: ctx.gravity_ms,
+        difficulty: diff,
+        ok: ctx.ok,
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  When — apply the action
+// ═════════════════════════════════════════════════════════════════════════════
+
+fn when_player_moves_left(ctx: TetrisCtx) -> TetrisCtx {
+    TetrisCtx {
+        board: ctx.board, piece: ctx.piece,
+        piece_opt: t_try_move(ctx.piece, ctx.board, -1, 0),
+        level: ctx.level, lines: ctx.lines, score: ctx.score,
+        cleared: ctx.cleared, gravity_ms: ctx.gravity_ms,
+        difficulty: ctx.difficulty, ok: ctx.ok,
+    }
+}
+
+fn when_player_moves_right(ctx: TetrisCtx) -> TetrisCtx {
+    TetrisCtx {
+        board: ctx.board, piece: ctx.piece,
+        piece_opt: t_try_move(ctx.piece, ctx.board, 1, 0),
+        level: ctx.level, lines: ctx.lines, score: ctx.score,
+        cleared: ctx.cleared, gravity_ms: ctx.gravity_ms,
+        difficulty: ctx.difficulty, ok: ctx.ok,
+    }
+}
+
+fn when_bottom_row_is_cleared(ctx: TetrisCtx) -> TetrisCtx {
+    // Fill the remaining col-9 cell, count the clear, award points.
+    let filled: Board = set_cell_impl(ctx.board, 19, 9, Cell::Filled(Shape::T));
+    let cleared: Int = count_full_rows(filled);
+    let award: Int = score_for_clear(cleared, ctx.level);
+    TetrisCtx {
+        board: filled, piece: ctx.piece, piece_opt: ctx.piece_opt,
+        level: ctx.level,
+        lines: ctx.lines + cleared,
+        score: ctx.score + award,
+        cleared: cleared,
+        gravity_ms: ctx.gravity_ms, difficulty: ctx.difficulty, ok: ctx.ok,
+    }
+}
+
+fn when_four_rows_are_cleared(ctx: TetrisCtx) -> TetrisCtx {
+    // Fill col 9 in rows 16..19 to complete all four rows.
+    let b1: Board = set_cell_impl(ctx.board, 16, 9, Cell::Filled(Shape::I));
+    let b2: Board = set_cell_impl(b1,        17, 9, Cell::Filled(Shape::I));
+    let b3: Board = set_cell_impl(b2,        18, 9, Cell::Filled(Shape::I));
+    let b4: Board = set_cell_impl(b3,        19, 9, Cell::Filled(Shape::I));
+    let cleared: Int = count_full_rows(b4);
+    let award: Int = score_for_clear(cleared, ctx.level);
+    TetrisCtx {
+        board: b4, piece: ctx.piece, piece_opt: ctx.piece_opt,
+        level: ctx.level,
+        lines: ctx.lines + cleared,
+        score: ctx.score + award,
+        cleared: cleared,
+        gravity_ms: ctx.gravity_ms, difficulty: ctx.difficulty, ok: ctx.ok,
+    }
+}
+
+fn when_progressing_lines(ctx: TetrisCtx, more: Int) -> TetrisCtx {
+    let new_lines: Int = ctx.lines + more;
+    let new_level: Int = level_from_lines(new_lines, 1);
+    TetrisCtx {
+        board: ctx.board, piece: ctx.piece, piece_opt: ctx.piece_opt,
+        level: new_level, lines: new_lines,
+        score: ctx.score, cleared: ctx.cleared,
+        gravity_ms: ctx.gravity_ms, difficulty: ctx.difficulty, ok: ctx.ok,
+    }
+}
+
+fn when_gravity_computed(ctx: TetrisCtx) -> TetrisCtx {
+    let base: Int = gameboy_ms_at_level(ctx.level);
+    let raw: Int = match ctx.difficulty {
+        Difficulty::Easy   => base + 300,
+        Difficulty::Normal => base,
+        Difficulty::Hard   => if base > 200 { base - 100 } else { base },
+    };
+    let g: Int = if raw < 100 { 100 } else if raw > 1200 { 1200 } else { raw };
+    TetrisCtx {
+        board: ctx.board, piece: ctx.piece, piece_opt: ctx.piece_opt,
+        level: ctx.level, lines: ctx.lines, score: ctx.score,
+        cleared: ctx.cleared,
+        gravity_ms: g,
+        difficulty: ctx.difficulty, ok: ctx.ok,
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Then — assertions
+// ═════════════════════════════════════════════════════════════════════════════
+
+fn then_move_was_blocked(ctx: TetrisCtx) -> Unit {
+    let ok: Int = match ctx.piece_opt {
+        None    => 1,
+        Some(_) => 0,
+    };
+    assert_eq(ok, 1)
+}
+
+fn then_move_succeeded(ctx: TetrisCtx) -> Unit {
+    let ok: Int = match ctx.piece_opt {
+        None    => 0,
+        Some(_) => 1,
+    };
+    assert_eq(ok, 1)
+}
+
+fn then_cleared_count_is(ctx: TetrisCtx, expected: Int) -> Unit {
+    assert_eq(ctx.cleared, expected)
+}
+
+fn then_score_is(ctx: TetrisCtx, expected: Int) -> Unit {
+    assert_eq(ctx.score, expected)
+}
+
+fn then_level_is(ctx: TetrisCtx, expected: Int) -> Unit {
+    assert_eq(ctx.level, expected)
+}
+
+fn then_gravity_ms_is(ctx: TetrisCtx, expected: Int) -> Unit {
+    assert_eq(ctx.gravity_ms, expected)
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Scenarios
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Scenario: Moving a T-piece into the left wall is blocked.
+test fn scenario_move_left_at_left_wall_is_blocked() -> Unit {
+    let ctx: TetrisCtx = given_t_piece_at_left_wall();
+    let ctx: TetrisCtx = when_player_moves_left(ctx);
+    then_move_was_blocked(ctx);
+}
+
+// Scenario: Moving a T-piece into the right wall is blocked.
+test fn scenario_move_right_at_right_wall_is_blocked() -> Unit {
+    let ctx: TetrisCtx = given_t_piece_at_right_wall();
+    let ctx: TetrisCtx = when_player_moves_right(ctx);
+    then_move_was_blocked(ctx);
+}
+
+// Scenario: Moving a T-piece away from the wall succeeds.
+test fn scenario_move_right_in_open_space_succeeds() -> Unit {
+    let ctx: TetrisCtx = given_t_piece_at(5, 4);
+    let ctx: TetrisCtx = when_player_moves_right(ctx);
+    then_move_succeeded(ctx);
+}
+
+// Scenario: Clearing a single line at level 1 awards 100 points.
+test fn scenario_single_line_clear_at_level_1_awards_100() -> Unit {
+    let ctx: TetrisCtx = given_board_with_bottom_row_almost_full();
+    let ctx: TetrisCtx = when_bottom_row_is_cleared(ctx);
+    then_cleared_count_is(ctx, 1);
+    then_score_is(ctx, 100);
+}
+
+// Scenario: Clearing a single line at level 5 awards 500 points.
+test fn scenario_single_line_clear_at_level_5_awards_500() -> Unit {
+    let ctx: TetrisCtx = given_game_at_level(5, 40);
+    let filled: Board = given_board_with_bottom_row_almost_full().board;
+    let ctx: TetrisCtx = TetrisCtx {
+        board: filled, piece: ctx.piece, piece_opt: ctx.piece_opt,
+        level: ctx.level, lines: ctx.lines, score: ctx.score,
+        cleared: ctx.cleared, gravity_ms: ctx.gravity_ms,
+        difficulty: ctx.difficulty, ok: ctx.ok,
+    };
+    let ctx: TetrisCtx = when_bottom_row_is_cleared(ctx);
+    then_cleared_count_is(ctx, 1);
+    then_score_is(ctx, 500);
+}
+
+// Scenario: Clearing four lines at once (Tetris) awards 800 * level.
+test fn scenario_tetris_at_level_1_awards_800() -> Unit {
+    let ctx: TetrisCtx = given_board_with_four_almost_full_rows();
+    let ctx: TetrisCtx = when_four_rows_are_cleared(ctx);
+    then_cleared_count_is(ctx, 4);
+    then_score_is(ctx, 800);
+}
+
+// Scenario: Clearing 10 lines from level 1 advances to level 2.
+test fn scenario_ten_lines_advances_to_level_two() -> Unit {
+    let ctx: TetrisCtx = given_game_at_level(1, 0);
+    let ctx: TetrisCtx = when_progressing_lines(ctx, 10);
+    then_level_is(ctx, 2);
+}
+
+// Scenario: Level caps at 20 regardless of line count.
+test fn scenario_level_caps_at_twenty() -> Unit {
+    let ctx: TetrisCtx = given_game_at_level(1, 0);
+    let ctx: TetrisCtx = when_progressing_lines(ctx, 500);
+    then_level_is(ctx, 20);
+}
+
+// Scenario: Level-1 Normal gravity matches Game Boy Tetris level 0.
+test fn scenario_level_1_normal_matches_gameboy_level_0() -> Unit {
+    let ctx: TetrisCtx = given_difficulty(Difficulty::Normal);
+    let ctx: TetrisCtx = when_gravity_computed(ctx);
+    // GB level 0: 53 frames at 60 Hz ≈ 883 ms; rounded to 900 in our table.
+    then_gravity_ms_is(ctx, 900);
+}
+
+// Scenario: Easy adds 300 ms of slack over the Game Boy curve.
+test fn scenario_easy_adds_slack_over_gameboy() -> Unit {
+    let ctx: TetrisCtx = given_difficulty(Difficulty::Easy);
+    let ctx: TetrisCtx = when_gravity_computed(ctx);
+    then_gravity_ms_is(ctx, 1200);
+}
+
+// Scenario: Hard trims 100 ms from the Game Boy curve.
+test fn scenario_hard_trims_gameboy() -> Unit {
+    let ctx: TetrisCtx = given_difficulty(Difficulty::Hard);
+    let ctx: TetrisCtx = when_gravity_computed(ctx);
+    then_gravity_ms_is(ctx, 800);
+}
+
+// Scenario: At max level Normal, gravity floors at the Game Boy Level 19 value.
+test fn scenario_level_20_normal_reaches_gameboy_floor() -> Unit {
+    let ctx: TetrisCtx = given_game_at_level(20, 190);
+    let ctx: TetrisCtx = TetrisCtx {
+        board: ctx.board, piece: ctx.piece, piece_opt: ctx.piece_opt,
+        level: ctx.level, lines: ctx.lines, score: ctx.score,
+        cleared: ctx.cleared, gravity_ms: ctx.gravity_ms,
+        difficulty: Difficulty::Normal,
+        ok: ctx.ok,
+    };
+    let ctx: TetrisCtx = when_gravity_computed(ctx);
+    // GB level 19-28: 6 frames at 60 Hz ≈ 100 ms.
+    then_gravity_ms_is(ctx, 100);
+}

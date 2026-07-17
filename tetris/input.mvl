@@ -1,0 +1,69 @@
+// input.mvl — Tainted[Key] → Command sanitizer.
+//
+// This is the ONLY function in the codebase that accepts a
+// `Tainted[Key]`.  A single audited `relabel trust` unwraps the taint
+// with the audit tag `TETRIS-INPUT-001`; the returned `Command` is
+// sanitized and safe to feed to `game.mvl::apply_command`.
+//
+// The compiler proves that no key value can influence game state
+// without passing through this function — `grep -n "relabel
+// trust.*TETRIS-INPUT-001" .` finds the single audit point.
+//
+// See requirements.md §16 for the full IFC boundary design.
+//
+// Demonstrates:
+//   1. Req 1  (Type Safety):   Command enum
+//   2. Req 3  (Exhaustiveness): every Key variant matched — no `_`
+//   3. Req 7  (Effects):       zero effect annotations
+//   4. Req 8  (Termination):   total fn
+//   5. Req 11 (IFC):           the sole audited trust boundary for keys
+//
+// Assurance note: 0 extern blocks.
+
+use models::{Command}
+use pkg.tui.{Key, Direction}
+
+// ── Sanitizer ─────────────────────────────────────────────────────────────────
+
+/// Convert a sanitized key press to a game command.  Pure and total.
+///
+/// Callers must have already performed `relabel trust(t,
+/// "TETRIS-INPUT-001")` at the pkg-tui boundary — see `main.mvl`.
+/// The compiler enforces this: any caller with a `Tainted[Key]` in
+/// hand cannot invoke `key_to_command` without an explicit relabel.
+///
+/// The exhaustive match on every `Key` variant (no `_` wildcard) is
+/// the sanitization: unknown keys map to `Command::Noop` rather than
+/// bypassing.
+pub total fn key_to_command(k: Key) -> Command {
+    match k {
+        Key::Arrow(Direction::Left)  => Command::MoveLeft,
+        Key::Arrow(Direction::Right) => Command::MoveRight,
+        Key::Arrow(Direction::Down)  => Command::SoftDrop,
+        Key::Arrow(Direction::Up)    => Command::Noop,     // no rotate on Up — use z/x
+        Key::Char(c) => char_to_command(c),
+        Key::Escape    => Command::Quit,
+        Key::Enter     => Command::Noop,
+        Key::Backspace => Command::Noop,
+        Key::Delete    => Command::Noop,
+        Key::Unknown   => Command::Noop,
+    }
+}
+
+/// Map a single-character key to a command.  Extracted for readability
+/// and to keep the top-level `key_to_command` match small.
+total fn char_to_command(c: String) -> Command {
+    if c == "z" || c == "Z" {
+        Command::RotateCCW
+    } else if c == "x" || c == "X" {
+        Command::RotateCW
+    } else if c == " " {
+        Command::HardDrop
+    } else if c == "p" || c == "P" {
+        Command::Pause
+    } else if c == "q" || c == "Q" {
+        Command::Quit
+    } else {
+        Command::Noop
+    }
+}
