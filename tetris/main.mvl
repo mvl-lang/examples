@@ -638,12 +638,8 @@ partial fn trusted_args() -> List[String] ! Env {
     let i: ref Int = 0;
     let out: ref List[String] = [];
     while i < n decreases n - i {
-        let opt: Option[Tainted[String]] = raw.get(i);
-        match opt {
-            None => (),
-            Some(t) => {
-                let _: Unit = out.push(relabel trust(t, "CLI-PARSE"));
-            },
+        if let Some(t) = raw.get(i) {
+            let _: Unit = out.push(relabel trust(t, "CLI-PARSE"));
         }
         i = i + 1;
     }
@@ -776,26 +772,23 @@ partial fn game_loop(
             Ok(o)  => o,
             Err(_) => None,
         };
-        match key_opt {
-            None => (),
-            Some(k) => {
-                // ── IFC trust boundary (requirements.md §16) ─────────────
-                // Every key from pkg-tui is treated as untrusted external
-                // input.  Two audited relabels bracket the boundary:
-                //   1. `TETRIS-TUI-BOUNDARY` — taint at the raw source.
-                //   2. `TETRIS-INPUT-001`   — trust before sanitization.
-                // grep -n 'TETRIS-INPUT-001' finds exactly this line.
-                let dirty_key: Tainted[Key] = relabel taint(k, "TETRIS-TUI-BOUNDARY");
-                let trusted:   Key          = relabel trust(dirty_key, "TETRIS-INPUT-001");
-                let cmd:       Command      = key_to_command(trusted);
-                if is_quit_command(cmd) {
-                    return LoopOutcome::Quit;
-                }
-                if !is_noop_command(cmd) {
-                    game = apply_command(game, cmd);
-                    dirty = true;
-                }
-            },
+        if let Some(k) = key_opt {
+            // ── IFC trust boundary (requirements.md §16) ─────────────
+            // Every key from pkg-tui is treated as untrusted external
+            // input.  Two audited relabels bracket the boundary:
+            //   1. `TETRIS-TUI-BOUNDARY` — taint at the raw source.
+            //   2. `TETRIS-INPUT-001`   — trust before sanitization.
+            // grep -n 'TETRIS-INPUT-001' finds exactly this line.
+            let dirty_key: Tainted[Key] = relabel taint(k, "TETRIS-TUI-BOUNDARY");
+            let trusted:   Key          = relabel trust(dirty_key, "TETRIS-INPUT-001");
+            let cmd:       Command      = key_to_command(trusted);
+            if is_quit_command(cmd) {
+                return LoopOutcome::Quit;
+            }
+            if !is_noop_command(cmd) {
+                game = apply_command(game, cmd);
+                dirty = true;
+            }
         }
 
         // Gravity clock — accumulate elapsed and fire when we cross
