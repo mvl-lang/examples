@@ -5,13 +5,15 @@
 // prover discharges these at compile time; the tests double as
 // executable examples.
 //
-// Type declarations are re-stated locally because the per-file test
-// checker doesn't resolve `use models::...` yet (#96 — same convention
-// as pong/models_test.mvl and snake_game/game_test.mvl).
+// Type declarations are re-stated locally because `mvl mcdc` does not
+// yet load sibling modules imported via `use models::...` (tracked in
+// mvl-lang/mvl#1888).  Once #1888 lands, this file can be rewritten to
+// import from models.mvl directly — see pattern 006 in the compiler
+// repo (`.openspec/patterns/006-no-test-shadows.md`).
 //
 // Assurance note: 0 extern blocks.
 
-// ── Type re-declarations ──────────────────────────────────────────────────────
+// ── Type re-declarations (temporary — see mvl-lang/mvl#1888) ─────────────────
 
 type Shape = enum { I, O, T, S, Z, L, J }
 type Rotation = enum { R0, R90, R180, R270 }

@@ -6,15 +6,15 @@
 //
 // Assurance note: 0 extern blocks.
 
-// ── Type re-declarations (test isolation, #96) ────────────────────────────────
+// ── Type re-declarations (temporary — see mvl-lang/mvl#1888) ─────────────────
 //
 // pkg.tui.Key / Direction are re-declared locally rather than imported
-// via `use pkg.tui.{Key, Direction}` — the checker emits
-// UndefinedVariable / UndefinedFunction warnings for enum-variant
-// references when the test file is checked in the LLVM-backend
-// pipeline (only), even though the tests compile and run.  Local
-// re-decls dodge the warning and match how models/game/input tests
-// already handle their type imports.
+// via `use pkg.tui.{Key, Direction}` for two reasons: (1) the LLVM-
+// backend checker emits UndefinedVariable warnings for enum-variant
+// references in imported test scope, and (2) `mvl mcdc` does not yet
+// load sibling modules via imports (mvl-lang/mvl#1888).  When both are
+// fixed, this block can be replaced with a proper `use` — see pattern
+// 006 in the compiler repo (`.openspec/patterns/006-no-test-shadows.md`).
 
 type Direction = enum { Up, Down, Left, Right }
 

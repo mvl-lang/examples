@@ -15,7 +15,9 @@
 // Assurance note: 0 extern blocks.
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  Type re-declarations (mirror models.mvl, per #96)
+//  Type re-declarations (temporary — see mvl-lang/mvl#1888)
+//  Once `mvl mcdc` loads sibling modules via imports, this block can be
+//  replaced with `use models::...` — pattern 006 in the compiler repo.
 // ═════════════════════════════════════════════════════════════════════════════
 
 type Shape = enum { I, O, T, S, Z, L, J }
